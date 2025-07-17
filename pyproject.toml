@@ -1,0 +1,37 @@
+[tool.poetry]
+name = "chess-analysis-project"
+version = "0.1.0"
+description = "A desktop and CLI application for deep chess analysis"
+authors = ["Hawi254 <jasper.hawi@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [
+    { include = "chess_analyzer" }
+]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.13"
+pyside6 = "^6.9.1"
+pydantic = "^2.7.4"
+pydantic-settings = "^2.3.4"
+structlog = "^24.2.0"
+python-chess = "^1.999"
+# --- THE FIX: Removed the unnecessary and conflicting stockfish package ---
+aiosqlite = "^0.20.0"
+aiofiles = "^23.2.1"
+prometheus-client = "^0.22.1"
+pillow = "^11.3.0"
+pyqtgraph = "^0.13.7"
+qt-material = "^2.17"
+numpy = "^2.3.1"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.4.2"
+ruff = "^0.5.5"
+pytest = "^8.3.2"
+pytest-asyncio = "^0.23.8"
+watchgod = "^0.8.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

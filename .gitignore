@@ -1,0 +1,82 @@
+# --- Python Virtual Environments ---
+# Ignore virtual environments created by venv, virtualenv, or poetry
+.venv/
+venv/
+env/
+chess/
+*.egg-info/
+*.so
+*.py[cod]
+
+# --- Python Bytecode and Caches ---
+# Ignore compiled Python files and cache directories
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+celerybeat-schedule
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Application Data, Caches, and User Files ---
+# Ignore all user-generated data, databases, and logs.
+# The `data` directory should be created by the application on first run.
+data/
+*.log
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Ignore user-specific PGN files in the root.
+# A small, generic sample PGN should be placed in a dedicated `samples/` directory if needed.
+/*.pgn
+
+# --- Generated Code ---
+# Ignore the compiled Qt resource file. Commit the source (.qrc, .png) instead.
+resources_rc.py
+
+# --- IDE / Editor / OS Files ---
+# VSCode
+.vscode/
+# PyCharm
+.idea/
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+# macOS
+.DS_Store
+# Windows
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+
+# --- Build, Distribution, and Test Artifacts ---
+/dist/
+/build/
+/htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+*.prof
+
+# --- External Binaries ---
+# Do not commit the Stockfish engine binary.
+# The application should rely on the user having it installed.
+stockfish/
+
+# --- Local Configuration Overrides ---
+# For developers who might want a local_settings.py to override config
+local_settings.py
+.env
+
+# --- Other ---
+# Ignore the file tree output file itself
+structure.txt
