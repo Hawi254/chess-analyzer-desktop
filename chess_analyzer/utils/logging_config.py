@@ -9,10 +9,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 import structlog
-from structlog.types import Processor, EventDict
-
-# ... (QtSignalProcessor is not needed here, so its definition is removed for clarity) ...
-# The custom processor for the GUI now only exists in qt_logging.py
+from structlog.types import Processor
 
 def setup_logging(
     log_level: str = "INFO",
@@ -23,14 +20,18 @@ def setup_logging(
     extra_handlers: Optional[List[logging.Handler]] = None
 ) -> None:
     """
-    Configures application-wide structured logging using structlog.
-    Restored to full functionality.
+    Configures application-wide structured logging using structlog, ensuring
+    it captures and formats logs from all sources, including third-party libraries.
     """
     if extra_processors is None:
         extra_processors = []
 
     shared_processors: List[Processor] = [
         structlog.contextvars.merge_contextvars,
+        # --- CORRECTED: Removed the problematic processor ---
+        # structlog.stdlib.filter_by_level, # This processor is redundant and causes crashes with foreign logs.
+        # The standard library's level-setting on the handler is the correct way to filter.
+        # ---------------------------------------------------
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
         structlog.stdlib.PositionalArgumentsFormatter(),
@@ -40,43 +41,45 @@ def setup_logging(
         structlog.processors.UnicodeDecoder(),
     ]
 
-    # Combine base processors with any extras provided
-    all_processors = shared_processors + extra_processors
-
     structlog.configure(
-        processors=all_processors + [structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
+        processors=shared_processors + extra_processors + [
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
 
+    renderer: Processor
+    if force_json_console:
+        renderer = structlog.processors.JSONRenderer()
+    else:
+        renderer = structlog.dev.ConsoleRenderer(colors=True)
+
+    formatter = structlog.stdlib.ProcessorFormatter(
+        foreign_pre_chain=shared_processors,
+        processor=renderer,
+    )
+
     handlers: List[logging.Handler] = []
-    
     if log_to_console:
-        console_renderer: Processor = (
-            structlog.processors.JSONRenderer()
-            if force_json_console
-            else structlog.dev.ConsoleRenderer(colors=True)
-        )
         console_handler = logging.StreamHandler(sys.stdout)
-        console_formatter = structlog.stdlib.ProcessorFormatter(processor=console_renderer)
-        console_handler.setFormatter(console_formatter)
+        console_handler.setFormatter(formatter)
         handlers.append(console_handler)
 
     if log_file:
-        try:
-            log_file.parent.mkdir(parents=True, exist_ok=True)
-            file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
-            file_formatter = structlog.stdlib.ProcessorFormatter(processor=structlog.processors.JSONRenderer())
-            file_handler.setFormatter(file_formatter)
-            handlers.append(file_handler)
-        except (IOError, OSError) as e:
-            print(f"FATAL: Could not open log file at {log_file}. Error: {e}", file=sys.stderr)
-            raise
+        file_formatter = structlog.stdlib.ProcessorFormatter(
+            foreign_pre_chain=shared_processors,
+            processor=structlog.processors.JSONRenderer(),
+        )
+        file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+        file_handler.setFormatter(file_formatter)
+        handlers.append(file_handler)
 
-    if extra_handlers:
+    if extra_handlers: # This loop is now correct for actual handlers
+        for handler in extra_handlers:
+            handler.setFormatter(formatter) # Ensure GUI handler also gets structured logs
         handlers.extend(extra_handlers)
     
-    level_val = logging.getLevelName(log_level.upper())
-    # The 'force=True' flag removes any handlers configured by default or from previous calls
-    logging.basicConfig(handlers=handlers, level=level_val, force=True)
+    # Use basicConfig to set up the root logger cleanly
+    logging.basicConfig(handlers=handlers, level=log_level.upper(), force=True)

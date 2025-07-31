@@ -65,7 +65,9 @@ class MoveAnalysisContext:
 
 @dataclass(frozen=True, slots=True)
 class EnrichedAnalysis:
-    classification: ClassificationResult; formatted_engine_lines: List[FormattedEngineLine]
+    classification: ClassificationResult
+    formatted_engine_lines: List[FormattedEngineLine]
+    game_phase: str
 
 @dataclass(frozen=True, slots=True)
 class AnnotationContext:
@@ -77,6 +79,7 @@ class AnnotationContext:
 class GameMetadata:
     white_player: str; black_player: str; result: str; event: str; site: str; date: str
     opening: Optional[str] = None; eco: Optional[str] = None
+    time: Optional[str] = None
 
 @dataclass(frozen=True, slots=True)
 class PlayerStats:
@@ -99,6 +102,21 @@ class GameSummary:
 class ProcessedGameResult:
     annotated_game: Optional["chess.pgn.Game"]; summary: Optional[GameSummary]
 
+
+# --- NEW: DTO for the paginated game report ---
+@dataclass(frozen=True, slots=True)
+class GameReportRow:
+    """A Data Transfer Object for a single row in the main game report view."""
+    game_id: str
+    game_date: Optional[str]
+    result: str
+    white_player: str
+    black_player: str
+    white_accuracy: Optional[float]
+    black_accuracy: Optional[float]
+    white_blunders: int
+    black_blunders: int
+    opening_name: Optional[str]
 @dataclass
 class RunReport:
     results: List[ProcessedGameResult]; processed_game_count: int
@@ -215,12 +233,10 @@ class QueuedGameStat:
     game_stat_payload: Dict[str, Any]
 
 @dataclass(frozen=True, slots=True)
-class QueuedOpeningLink:
-    """Payload to link a FEN to a specific opening."""
+class QueuedAnnotatedGame:
+    """Payload to store the full PGN text of an annotated game."""
     game_id: str
-    fen: str
-    opening_name: str
-    eco_code: Optional[str]
+    pgn_text: str
 
 @dataclass(frozen=True, slots=True)
 class QueuedGameComplete:
@@ -228,5 +244,6 @@ class QueuedGameComplete:
     game_id: str
 
 QueuePayload: TypeAlias = Union[
-    QueuedPosition, QueuedStatUpdate, QueuedMove, QueuedGameStat, QueuedOpeningLink, QueuedGameComplete
+    QueuedPosition, QueuedStatUpdate, QueuedMove, QueuedGameStat,
+    QueuedAnnotatedGame, QueuedGameComplete
 ]

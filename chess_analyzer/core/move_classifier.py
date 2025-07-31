@@ -34,11 +34,16 @@ class MoveClassifier:
     def __init__(self):
         """Initializes the classifier and defines the ordered heuristic chain."""
         self._heuristic_chain: List["Heuristic"] = [
-            CplBasedHeuristic(),          # 1. Baseline classification (Blunder, Mistake, etc.)
-            BrilliantMoveHeuristic(),     # 2. Override: Check for brilliance (!!)
-            GreatMoveHeuristic(),         # 3. Override: Check for great moves (!)
-            ReciprocalBlunderHeuristic(), # 4. Flagging: Mark reciprocal blunders
-            TacticFlaggingHeuristic(),    # 5. Flagging: Mark missed tactical opportunities
+            # <<< FIX: Run flagging heuristics FIRST.
+            TacticFlaggingHeuristic(),        # 1. Flagging: Mark missed tactical opportunities
+            ReciprocalBlunderHeuristic(),     # 2. Flagging: Mark reciprocal blunders
+            
+            # <<< FIX: Run baseline classification SECOND.
+            CplBasedHeuristic(),              # 3. Baseline classification (Blunder, Mistake, etc.)
+            
+            # <<< FIX: Run overrides LAST.
+            BrilliantMoveHeuristic(),         # 4. Override: Check for brilliance (!!)
+            GreatMoveHeuristic(),             # 5. Override: Check for great moves (!)
         ]
 
     def classify_move(self, context: "MoveAnalysisContext") -> "ClassificationResult":

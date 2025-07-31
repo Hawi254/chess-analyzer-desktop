@@ -11,7 +11,7 @@ issues, such as games starting from custom positions (FENs).
 """
 import structlog
 from collections import OrderedDict
-from typing import List, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
 
 import chess
 import chess.pgn
@@ -24,9 +24,40 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+# A list of common tournament/event suffixes to strip when deriving an opening name.
+# The order matters; longer, more specific suffixes should come first.
+_EVENT_SUFFIXES_TO_STRIP: List[str] = [
+    "SuperBlitz Arena", "Blitz Arena", "Rapid Championship", "Classical Championship",
+    "Bullet Arena", "Blitz", "Rapid", "Classical", "Bullet", "Arena", "Championship"
+]
+
 def _get_move_number(ply: int) -> int:
     """Calculates the 1-indexed move number from a 0-indexed ply."""
     return ply // 2 + 1
+
+def _derive_opening_from_event(opening: Optional[str], event: str) -> Optional[str]:
+    """
+    A heuristic to derive the opening name from the event tag if the opening tag is '?'.
+    
+    Args:
+        opening: The raw value from the PGN "Opening" tag.
+        event: The raw value from the PGN "Event" tag.
+
+    Returns:
+        The corrected opening name, or the original if no correction was needed.
+    """
+    if opening != "?":
+        return opening
+
+    derived_opening = event
+    for suffix in _EVENT_SUFFIXES_TO_STRIP:
+        # Use .replace() to handle suffixes that might appear mid-string, then strip.
+        derived_opening = derived_opening.replace(f" {suffix}", "").strip()
+    
+    if derived_opening and derived_opening.lower() != event.lower():
+        return derived_opening
+    
+    return opening
 
 def parse_game_data(game: chess.pgn.Game) -> ParsedGame:
     """
@@ -48,6 +79,13 @@ def parse_game_data(game: chess.pgn.Game) -> ParsedGame:
         PgnParsingError: If an illegal move is found, indicating a corrupt PGN record.
     """
     headers = game.headers
+    
+    # Apply heuristic to derive opening name if it's missing.
+    opening_name = _derive_opening_from_event(
+        headers.get("Opening"),
+        headers.get("Event", "Unknown Event")
+    )
+    
     metadata = GameMetadata(
         white_player=headers.get("White", "Unknown Player"),
         black_player=headers.get("Black", "Unknown Player"),
@@ -55,8 +93,9 @@ def parse_game_data(game: chess.pgn.Game) -> ParsedGame:
         event=headers.get("Event", "Unknown Event"),
         site=headers.get("Site", "Unknown Site"),
         date=headers.get("Date", "????.??.??"),
-        opening=headers.get("Opening"),
+        opening=opening_name,
         eco=headers.get("ECO"),
+        time=headers.get("UTCTime"),
     )
 
     # Use game.board() instead of chess.Board() to correctly initialize

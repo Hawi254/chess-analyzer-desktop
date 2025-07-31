@@ -15,14 +15,16 @@ from typing import Any, Dict, Optional, TypeAlias, Union
 
 import structlog
 
-from chess_analyzer.types import QueuedGameComplete, QueuedGameStat, QueuedMove, QueuedOpeningLink, QueuedPosition, QueuedStatUpdate
+from chess_analyzer.types import (QueuedAnnotatedGame, QueuedGameComplete,
+                                  QueuedGameStat, QueuedMove,
+                                  QueuedPosition, QueuedStatUpdate)
 
 logger = structlog.get_logger(__name__)
 
 # A type alias for all valid queue payloads, now imported from types.py
 # for a single source of truth. This is a conceptual representation.
 QueuePayload: TypeAlias = Union[
-    QueuedPosition, QueuedStatUpdate, QueuedMove, QueuedGameStat, QueuedOpeningLink, QueuedGameComplete
+    QueuedPosition, QueuedStatUpdate, QueuedMove, QueuedGameStat, QueuedGameComplete, QueuedAnnotatedGame
 ]
 
 class PersistenceClient:
@@ -54,6 +56,11 @@ class PersistenceClient:
             item: A valid queue payload object.
         """
         try:
+            logger.debug(
+                "PersistenceClient: Queuing item.",
+                item_type=type(item).__name__,
+                game_id=getattr(item, 'game_id', 'N/A')
+            )
             await self._queue.put(item)
         except asyncio.CancelledError:
             # Ensure task cancellations are propagated correctly.

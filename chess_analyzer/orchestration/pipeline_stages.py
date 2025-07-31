@@ -23,15 +23,14 @@ from chess_analyzer.core import (board_analyzer, chess_utils, game_phaser,
                                  summary_aggregator, time_parser)
 from chess_analyzer.core.chess_utils import get_material_diff, interpret_engine_score
 from chess_analyzer.orchestration.annotator_client import build_annotation_context as build_anno_ctx
-from chess_analyzer.orchestration.persistence_client import (
-    QueuedGameComplete, QueuedGameStat, QueuedMove, QueuedOpeningLink,
-    QueuedPosition, QueuedStatUpdate
-)
 from chess_analyzer.tracing import trace_stage
 from chess_analyzer.types import (GameContext, MoveAnalysisContext,
                                   MoveEvaluations, PreviousMoveContext,
-                                  ProcessingStage, EnrichedAnalysis,
-                                  GameSlice, GameSummary, RawEngineLine)
+                                  QueuedAnnotatedGame, QueuedGameComplete,
+                                  QueuedGameStat, QueuedMove, QueuedPosition,
+                                  QueuedStatUpdate, ProcessingStage,
+                                  EnrichedAnalysis, GameSlice, GameSummary,
+                                  RawEngineLine)
 
 if TYPE_CHECKING:
     from chess_analyzer.config.settings import AnalysisSettings
@@ -126,39 +125,83 @@ class ClassificationStage(ProcessingStage):
 
     @trace_stage
     async def execute(self, context: GameContext) -> GameContext:
-        last_clock = defaultdict(lambda: None)
-        if time_control := context.raw_game.headers.get("TimeControl"):
-            try: last_clock = defaultdict(lambda: float(int(time_control.split('+')[0])))
-            except (ValueError, IndexError): pass
+        # --- START OF CORRECTED TIME CALCULATION LOGIC ---
         
-        last_move_result = None
+        # This dictionary will store the last known clock time for each player ('w' and 'b').
+        last_clock: Dict[str, Optional[float]] = {'w': None, 'b': None}
+        
+        # Initialize the clock from the TimeControl header if available.
+        if time_control_str := context.raw_game.headers.get("TimeControl"):
+            try:
+                base_time_seconds = float(time_control_str.split('+')[0])
+                last_clock['w'] = base_time_seconds
+                last_clock['b'] = base_time_seconds
+            except (ValueError, IndexError):
+                logger.warning("Could not parse initial time from TimeControl header.", tc=time_control_str)
+
+        time_spent_per_move: List[Optional[float]] = []
+        time_increment = chess_utils.get_time_increment(context.raw_game.headers.get("TimeControl", "0+0"))
+
         for slice in context.parsed_game.slices:
-            turn = chess.WHITE if slice.player_color == 'w' else chess.BLACK
+            player_color = slice.player_color  # Use 'w' or 'b' directly as the key
             time_spent = None
-            if clk_tag := [c for c in slice.pgn_node.comment.split(' ') if c.startswith('[%clk')]:
-                if time_rem := time_parser.parse_clk_comment_to_seconds(clk_tag[0]):
-                    if last_clock[turn] is not None:
-                        time_spent = last_clock[turn] - time_rem
-                    last_clock[turn] = time_rem
+            
+            # Pass the entire comment to the robust parser.
+            current_clk_seconds = time_parser.parse_clk_comment_to_seconds(slice.pgn_node.comment)
+            
+            if current_clk_seconds is not None:
+                previous_player_clk = last_clock[player_color]
+                
+                if previous_player_clk is not None:
+                    # Calculate the time spent.
+                    time_spent = previous_player_clk - current_clk_seconds + time_increment
+                    
+                    # Ensure time spent is non-negative.
+                    if time_spent < 0:
+                        # This can happen on the first move if the PGN clock tag is weird.
+                        # We'll log it but use a fallback.
+                        logger.debug("Negative time spent calculated, falling back to None.",
+                                     prev_clk=previous_player_clk, curr_clk=current_clk_seconds)
+                        time_spent = None
+                
+                # Update the last known clock time for the current player.
+                last_clock[player_color] = current_clk_seconds
+            
+            time_spent_per_move.append(time_spent)
+        
+        # --- END OF CORRECTED TIME CALCULATION LOGIC ---
+
+        last_move_result = None
+        # Now, loop through the slices again to build the contexts, using our pre-calculated times.
+        for i, slice in enumerate(context.parsed_game.slices):
+            time_spent = time_spent_per_move[i]
             
             prev_move_ctx = PreviousMoveContext(classification=last_move_result.classification) if last_move_result else None
             move_context = _build_move_analysis_context(slice, context, prev_move_ctx, time_spent)
             
             if move_context is None:
-                last_move_result = None; continue
+                last_move_result = None
+                continue
             
             context.move_evaluations.append(move_context.evaluations)
+            
+            # Determine the game phase once for the current position.
+            game_phase = game_phaser.determine_game_phase(move_context.board, context.settings).value
             
             position_payload = {
                 "fen": slice.fen_before, "player_to_move": slice.player_color,
                 "material_balance": int(get_material_diff(move_context.board, chess.WHITE) * 100),
-                "game_phase": game_phaser.determine_game_phase(move_context.board, context.settings).value,
+                "game_phase": game_phase,
                 "game_id": context.game_id
             }
             await self._client.queue_item(QueuedPosition(position_payload=position_payload))
 
             result = self._classifier.classify_move(move_context)
-            enriched_result = board_analyzer.enrich_analysis_with_san(move_context.board, result, move_context.top_engine_lines, context.settings)
+            
+            # Pass the game_phase to the enrichment function.
+            enriched_result = board_analyzer.enrich_analysis_with_san(
+                move_context.board, result, move_context.top_engine_lines, context.settings, game_phase
+            )
             context.enriched_analyses.append(enriched_result)
             
             eval_std_dev = _calculate_eval_std_dev(move_context.top_engine_lines, context.settings)
@@ -166,8 +209,9 @@ class ClassificationStage(ProcessingStage):
             stat_update = stats_updater.calculate_new_position_stats(slice.fen_before, stats, result, eval_std_dev, context.settings)
             context.stat_updates.append(stat_update)
             last_move_result = result
+            
         return context
-
+    
 class PersistenceStage(ProcessingStage):
     """Queues all remaining analysis artifacts for batch database insertion."""
     def __init__(self, client: "PersistenceClient"):
@@ -177,33 +221,46 @@ class PersistenceStage(ProcessingStage):
     async def execute(self, context: GameContext) -> GameContext:
         if not context.parsed_game: return context
         
+        last_line_san = ""
         for update in context.stat_updates:
             await self._client.queue_item(QueuedStatUpdate(game_id=context.game_id, stats_payload=update))
             
         for i, enriched in enumerate(context.enriched_analyses):
             slice = context.parsed_game.slices[i]
             result = enriched.classification
-            
-            # --- ENHANCED: Get the post-move evaluation from the context ---
+
+            # --- NEW: Generate move_san and the cumulative line_san ---
+            board = chess.Board(slice.fen_before)
+            move_san = board.san(slice.move)
+
+            if slice.player_color == 'w':
+                # It's White's move, add the move number.
+                current_line_san = f"{last_line_san} {slice.move_number}. {move_san}".strip()
+            else:
+                # It's Black's move, just add the move SAN.
+                current_line_san = f"{last_line_san} {move_san}".strip()
+            last_line_san = current_line_san
+            # --- END NEW ---
+
             post_move_eval = None
             if i < len(context.move_evaluations):
                 post_move_eval = context.move_evaluations[i].eval_after
 
+            best_move_san = None
+            if enriched.formatted_engine_lines:
+                best_move_san = enriched.formatted_engine_lines[0].move_san
+
             await self._client.queue_item(QueuedMove(move_payload={
-                "game_id": context.game_id, "fen": slice.fen_before, "ply": slice.ply,
-                "move_uci": slice.move.uci(), "cpl": result.centipawn_loss,
+                "game_id": context.game_id, "fen": slice.fen_before, "ply": slice.ply, "move_uci": slice.move.uci(),
+                "move_san": move_san, "line_san": current_line_san, "cpl": result.centipawn_loss,
                 "classification": result.classification.value if result.classification else "N/A",
                 "time_spent_seconds": result.time_spent_seconds,
                 "is_reciprocal_blunder": result.is_reciprocal_blunder,
-                "post_move_eval": post_move_eval # Add to payload
+                "best_move_san": best_move_san,
+                "post_move_eval": post_move_eval, # Add to payload
+                "game_phase": enriched.game_phase
             }))
-                    
-        if opening_name := context.parsed_game.metadata.opening:
-            eco = context.parsed_game.metadata.eco
-            for fen in context.parsed_game.unique_fens:
-                await self._client.queue_item(QueuedOpeningLink(
-                    game_id=context.game_id, fen=fen, opening_name=opening_name, eco_code=eco
-                ))
+
         return context
 
 class SummaryStage(ProcessingStage):
@@ -230,15 +287,19 @@ class SummaryStage(ProcessingStage):
         
         time_category = chess_utils.categorize_time_control(raw_headers.get("TimeControl"))
         result = context.summary.metadata.result
+        termination = chess_utils.determine_game_termination(context.raw_game)
 
         # White player stats payload
         white_payload = {
             "game_id": context.game_id, "player_name": context.summary.metadata.white_player,
             "player_color": "White", "is_user_game": 1 if is_white_user else 0,
-            "game_date": context.summary.metadata.date, "time_control_category": time_category,
+            "date": context.summary.metadata.date, "game_time": context.summary.metadata.time,
+            "time_control_category": time_category,
             "opponent_rating": safe_get_rating(raw_headers, "BlackElo"),
             "eval_volatility": context.summary.stats.eval_volatility,
-            "accuracy_percent": context.summary.stats.white.accuracy_percent, "result": result
+            "accuracy_percent": context.summary.stats.white.accuracy_percent, "result": result,
+            "termination": termination,
+            "opening_name": context.summary.metadata.opening
         }
         await self._client.queue_item(QueuedGameStat(game_stat_payload=white_payload))
         
@@ -246,10 +307,13 @@ class SummaryStage(ProcessingStage):
         black_payload = {
             "game_id": context.game_id, "player_name": context.summary.metadata.black_player,
             "player_color": "Black", "is_user_game": 1 if is_black_user else 0,
-            "game_date": context.summary.metadata.date, "time_control_category": time_category,
+            "date": context.summary.metadata.date, "game_time": context.summary.metadata.time,
+            "time_control_category": time_category,
             "opponent_rating": safe_get_rating(raw_headers, "WhiteElo"),
             "eval_volatility": context.summary.stats.eval_volatility,
-            "accuracy_percent": context.summary.stats.black.accuracy_percent, "result": result
+            "accuracy_percent": context.summary.stats.black.accuracy_percent, "result": result,
+            "termination": termination,
+            "opening_name": context.summary.metadata.opening
         }
         await self._client.queue_item(QueuedGameStat(game_stat_payload=black_payload))
         
@@ -258,8 +322,9 @@ class SummaryStage(ProcessingStage):
 
 class AnnotationStage(ProcessingStage):
     """Adds all generated analysis as comments to the PGN game object."""
-    def __init__(self, annotator: "AnnotatorClient"):
+    def __init__(self, annotator: "AnnotatorClient", client: "PersistenceClient"):
         self._annotator = annotator
+        self._client = client
     
     @trace_stage
     async def execute(self, context: GameContext) -> GameContext:
@@ -280,6 +345,22 @@ class AnnotationStage(ProcessingStage):
             current_node.comment = self._annotator.generate_pgn_node_comment(anno_ctx)
             
         context.annotated_game = context.raw_game
+        
+        # --- NEW: Queue the fully annotated game PGN for persistence ---
+        if context.annotated_game:
+            pgn_text = str(context.annotated_game)
+            payload = QueuedAnnotatedGame(game_id=context.game_id, pgn_text=pgn_text)
+            logger.info(
+                "AnnotationStage: Preparing to queue annotated game.",
+                game_id=context.game_id,
+                pgn_text_len=len(pgn_text)
+            )
+            await self._client.queue_item(payload)
+            logger.info(
+                "AnnotationStage: Successfully queued annotated game for persistence.",
+                game_id=context.game_id
+            )
+            
         return context
 
 async def run_game_processing_pipeline(

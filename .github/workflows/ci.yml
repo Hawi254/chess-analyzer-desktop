@@ -28,26 +28,24 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-        cache: 'pip' # Cache dependencies to speed up future runs
+        cache: 'poetry' # Cache Poetry's virtualenv
 
-    # Step 3: Install project dependencies
+    # Step 3: Install Poetry
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+
+    # Step 4: Install project dependencies using Poetry
     - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      run: poetry install --with dev
 
-    # Step 4: Run the Linter with Ruff (checks for style issues and common errors)
+    # Step 5: Run the Linter with Ruff (checks for style issues and common errors)
     - name: Lint with Ruff
-      run: |
-        pip install ruff
-        ruff check .
+      run: poetry run ruff check .
 
-    # Step 5: Run the Static Type Checker with MyPy
+    # Step 6: Run the Static Type Checker with MyPy
     - name: Check types with MyPy
-      run: |
-        mypy chess_analyzer/
+      run: poetry run mypy chess_analyzer/
 
-    # Step 6: Run the Unit Tests with Pytest
+    # Step 7: Run the Unit Tests with Pytest
     - name: Test with Pytest
-      run: |
-        pytest
+      run: poetry run pytest

@@ -10,6 +10,7 @@ form the foundational building blocks for more complex analysis.
 
 from typing import Dict, Final, Optional, TYPE_CHECKING
 import chess
+import chess.pgn
 
 if TYPE_CHECKING:
     from chess_analyzer.config.settings import AnalysisSettings
@@ -129,3 +130,61 @@ def categorize_time_control(time_control_tag: Optional[str]) -> str:
     except (ValueError, IndexError):
         # Gracefully handle non-standard or malformed tags.
         return "Unknown"
+    
+def get_time_increment(time_control_str: Optional[str]) -> int:
+    """
+    Extracts the time increment from a TimeControl string (e.g., '600+5' -> 5).
+    
+    Args:
+        time_control_str: The raw string from the PGN "TimeControl" header.
+                          e.g., "300+5", "600", "1800+10".
+                          
+    Returns:
+        The increment in seconds as an integer, or 0 if not found.
+    """
+    if not time_control_str or '+' not in time_control_str:
+        return 0
+    
+    try:
+        # Get the part after the '+' and convert it to an integer.
+        increment_str = time_control_str.split('+')[1]
+        return int(increment_str)
+    except (IndexError, ValueError):
+        # Handle cases like "600+" or "600+abc"
+        return 0
+
+def determine_game_termination(game: chess.pgn.Game) -> str:
+    """
+    Determines the reason for game termination using heuristic logic,
+    including Lichess automatic 3‑fold repetition and 50‑move rule draws.
+    """
+    termination = game.headers.get("Termination")
+    if termination == "Time forfeit":
+        return "Time forfeit"
+
+    board = game.board()
+    for move in game.mainline_moves():
+        board.push(move)
+
+    if board.is_checkmate():
+        return "Checkmate"
+    if board.is_stalemate():
+        return "Stalemate"
+    # Lichess auto‐claims 3‑fold repetition draw
+    if board.is_repetition(3):
+        return "Draw by Threefold Repetition"
+    # Lichess auto‐claims 50‑move rule
+    if board.halfmove_clock >= 100:
+        return "Draw by 50‑move Rule"
+
+    if board.is_insufficient_material():
+        return "Draw by Insufficient Material"
+
+    result = game.headers.get("Result")
+    if result in ["1-0", "0-1"]:
+        return "Resignation"
+    if result == "1/2-1/2":
+        # If it wasn't auto‑claimed, fall back to agreement
+        return "Draw by Agreement"
+
+    return termination or "Unknown"

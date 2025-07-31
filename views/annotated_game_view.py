@@ -4,19 +4,29 @@ Defines the Annotated Game View for detailed move-by-move analysis.
 """
 import chess
 import chess.svg
-from PySide6.QtCore import QSize, Qt, Signal
+from enum import Enum, auto
+
+from PySide6.QtCore import QSize, Qt, Signal, Slot
 from PySide6.QtSvgWidgets import QSvgWidget
-from PySide6.QtWidgets import (QApplication, QGroupBox, QHBoxLayout, QLabel,
-                               QListWidget, QListWidgetItem, QPushButton,
+from PySide6.QtWidgets import (QApplication, QGroupBox, QHBoxLayout, QLabel, QListWidget,
+                               QListWidgetItem, QPushButton, QStackedWidget,
                                QVBoxLayout, QWidget)
+import structlog
 
 from state.app_state import AppState
 from views.move_delegate import MoveInfoDelegate
 
 
 class AnnotatedGameView(QWidget):
+    logger = structlog.get_logger()
     """The view for displaying a single, annotated chess game."""
     
+    class DisplayState(Enum):
+        """Defines the possible display states for this view."""
+        LOADING = auto()
+        CONTENT = auto()
+
+    # Define a signal for when the view wants to go back to the report
     back_requested = Signal()
 
     def __init__(self, app_state: AppState, parent: QWidget | None = None):
@@ -27,6 +37,7 @@ class AnnotatedGameView(QWidget):
 
         self._create_widgets()
         self._create_layout()
+        self._configure_widgets()
         
         # Set up the custom delegate for the move list
         self.move_list.setItemDelegate(MoveInfoDelegate(self))
@@ -34,10 +45,15 @@ class AnnotatedGameView(QWidget):
         self._connect_signals()
         
     def _create_widgets(self):
-        # Left side
-        self.board_widget = QSvgWidget()
+        # --- State Management Widgets ---
+        self.stacked_widget = QStackedWidget(self)
+        self.loading_label = QLabel("Loading selected game...")
         
-        # Right side
+        # --- Main Content Container ---
+        self.content_widget = QWidget()
+
+        # --- Widgets for the Content View ---
+        self.board_widget = QSvgWidget()        
         self.game_info_label = QLabel()
         self.move_list = QListWidget()
         self.back_button = QPushButton("<< Back to Report")
@@ -46,20 +62,24 @@ class AnnotatedGameView(QWidget):
         self.copy_fen_button = QPushButton("Copy FEN")
 
     def _create_layout(self):
-        main_layout = QHBoxLayout(self)
-        
+        main_layout = QVBoxLayout(self)
+        main_layout.addWidget(self.stacked_widget)
+
+        # --- Assemble the Content Card ---
+        content_layout = QHBoxLayout(self.content_widget)
+
         # Left side (Board)
         board_group = QGroupBox("Board")
         board_layout = QVBoxLayout(board_group)
         board_layout.addWidget(self.board_widget)
-        main_layout.addWidget(board_group, stretch=2)
-        
+        content_layout.addWidget(board_group, stretch=2)
+
         # Right side (Info & Moves)
         info_group = QGroupBox("Game Analysis")
         info_layout = QVBoxLayout(info_group)
         info_layout.addWidget(self.game_info_label)
         info_layout.addWidget(self.move_list)
-        
+
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.back_button)
         button_layout.addStretch()
@@ -68,8 +88,15 @@ class AnnotatedGameView(QWidget):
         button_layout.addStretch()
         button_layout.addWidget(self.copy_fen_button)
         info_layout.addLayout(button_layout)
-        
-        main_layout.addWidget(info_group, stretch=1)
+        content_layout.addWidget(info_group, stretch=1)
+
+        # --- Add Cards to the Stacked Widget ---
+        self.stacked_widget.addWidget(self.content_widget)
+        self.stacked_widget.addWidget(self.loading_label)
+
+    def _configure_widgets(self):
+        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.set_display_state(AnnotatedGameView.DisplayState.LOADING)
 
     def _connect_signals(self):
         self._app_state.game_selected.connect(self._on_game_loaded)
@@ -99,22 +126,13 @@ class AnnotatedGameView(QWidget):
         start_item.setData(Qt.ItemDataRole.UserRole, {"san": "Start Position", "comment": ""})
         self.move_list.addItem(start_item)
         
-        # --- CORRECTED: Convert the iterator to a list before iterating ---
-        mainline_nodes = list(self._game.mainline())
-        for i, node in enumerate(mainline_nodes):
-        # ----------------------------------------------------------------
+        for node in self._game.mainline():
             move = node.move
             san = board.san(move)
             board.push(move)
             
-            move_num_str = ""
-            if board.turn == chess.BLACK:
-                move_num_str = f"{board.fullmove_number}. "
-            else:
-                # --- CORRECTED: Use the list for safe index access ---
-                if i == 0 or board.fullmove_number != mainline_nodes[i-1].board().fullmove_number:
-                # ----------------------------------------------------
-                     move_num_str = f"{board.fullmove_number}... "
+            # Simplified and corrected move number formatting
+            move_num_str = f"{board.fullmove_number}. " if board.turn == chess.BLACK else ""
 
             item = QListWidgetItem(f"{move_num_str}{san}")
             item.setData(Qt.ItemDataRole.UserRole, {"san": f"{move_num_str}{san}", "comment": node.comment})
@@ -124,6 +142,7 @@ class AnnotatedGameView(QWidget):
         
     def _on_ply_changed(self, ply: int):
         """Updates the board and selection when the ply changes."""
+        self.logger.debug("AnnotatedGameView received ply change", ply=ply)
         if not self._game:
             return
             
@@ -156,3 +175,11 @@ class AnnotatedGameView(QWidget):
         """Copies the current board's FEN to the clipboard."""
         if self._board:
             QApplication.clipboard().setText(self._board.fen())
+
+    @Slot(DisplayState)
+    def set_display_state(self, state: DisplayState):
+        """Sets the view to show the appropriate widget based on the state."""
+        if state == AnnotatedGameView.DisplayState.LOADING:
+            self.stacked_widget.setCurrentWidget(self.loading_label)
+        elif state == AnnotatedGameView.DisplayState.CONTENT:
+            self.stacked_widget.setCurrentWidget(self.content_widget)

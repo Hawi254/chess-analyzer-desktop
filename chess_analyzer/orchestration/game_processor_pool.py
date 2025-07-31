@@ -69,7 +69,7 @@ class GameProcessorPool:
         """The main execution loop for the pool."""
         all_results: List[ProcessedGameResult] = []
         pending_tasks: Dict[asyncio.Task, "chess.pgn.Game"] = {}
-        work_queue: asyncio.Queue["chess.pgn.Game"] = asyncio.Queue()
+        work_queue: asyncio.Queue[Optional["chess.pgn.Game"]] = asyncio.Queue()
 
         async def _filler():
             async for game in self._pgn_service.stream_games(input_pgn_path):
@@ -82,6 +82,10 @@ class GameProcessorPool:
             """Callback executed when a game processing task completes or fails."""
             original_game = pending_tasks.pop(task, None)
             if not original_game: return
+            
+            # We do not call task_done() here immediately. It's only called when a game
+            # is TRULY finished (i.e., successfully processed or failed max retries).
+            # This is the key to making `work_queue.join()` work correctly.
             
             game_id = self._pgn_service._extract_game_id(original_game.headers)
             try:
@@ -96,32 +100,42 @@ class GameProcessorPool:
                     
                     if result.annotated_game:
                         self._pgn_write_queue.put_nowait(result.annotated_game)
+                
+                work_queue.task_done() # Game processed successfully.
             
             except PgnParsingError as e:
                 logger.warning("Skipped game due to PGN parsing error.", game_id=game_id, error=str(e), show_in_gui=True)
+                work_queue.task_done() # Skipped game is considered done.
             except EngineError as e:
                 logger.error("Engine error processing game.", game_id=game_id, error=str(e), show_in_gui=True)
                 if self._retry_counts[game_id] < self._config.max_retries:
                     self._retry_counts[game_id] += 1
                     logger.info("Rescheduling game for analysis.", game_id=game_id, attempt=self._retry_counts[game_id], show_in_gui=True)
+                    # IMPORTANT: We do NOT call task_done() here. We re-queue the work.
+                    # The original `get()` will be matched by a `task_done()` from the *new* task.
                     work_queue.put_nowait(original_game)
                     if e.engine: asyncio.create_task(self._engine_pool.retire_and_replace(e.engine))
                 else:
                     logger.error("Max retries exceeded for game.", game_id=game_id, show_in_gui=True)
+                    work_queue.task_done() # Game failed permanently.
             except asyncio.CancelledError:
                 logger.warning("Game processing task was cancelled.", game_id=game_id)
+                work_queue.task_done() # Cancelled game is considered done.
             except Exception as e:
                 logger.error("Unhandled exception in game task.", game_id=game_id, exc_info=e)
+                work_queue.task_done() # Unhandled exception, game is done.
 
+        # --- RE-ARCHITECTED: Robust main consumer loop using queue.join() ---
+        # This loop pulls games from the queue and spawns tasks. It exits when it
+        # receives the `None` sentinel from the producer (`_filler`).
         while not self._shutdown_event.is_set():
             try:
                 game = await asyncio.wait_for(work_queue.get(), timeout=1.0)
-                if game is None: break
-                
-                if self._shutdown_event.is_set():
-                    logger.info("Shutdown signaled, not starting new tasks from queue.")
+                if game is None:
+                    # Producer is done. Break the consumption loop.
+                    # We still need to wait for tasks to finish, which is done below.
                     break
-
+                
                 await self._semaphore.acquire()
                 cid = CorrelationID(
                     run_id=run_id,
@@ -132,13 +146,24 @@ class GameProcessorPool:
                 pending_tasks[task] = game
                 task.add_done_callback(_done_callback)
             except asyncio.TimeoutError:
+                # This is expected if the queue is temporarily empty.
                 continue
 
+        # After the producer is done, we wait for the queue to be fully processed.
+        # `work_queue.join()` will block until `task_done()` has been called for every
+        # item that was ever put on the queue, including retries. This is the
+        # definitive way to ensure all work is complete before proceeding.
+        if not self._shutdown_event.is_set():
+            logger.info("Producer finished. Waiting for all game processing tasks to complete...")
+            await work_queue.join()
+            logger.info("All game processing tasks completed.")
+
+        # Final cleanup of any tasks that might have been cancelled during shutdown.
         if pending_tasks:
+            logger.warning("Cancelling outstanding tasks due to shutdown.", count=len(pending_tasks))
             for task in pending_tasks:
                 task.cancel()
             await asyncio.gather(*list(pending_tasks.keys()), return_exceptions=True)
         if not filler_task.done(): filler_task.cancel()
         
-        # --- CORRECTED: Return the correct variable ---
         return all_results

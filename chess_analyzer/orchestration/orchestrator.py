@@ -5,51 +5,88 @@ The top-level application orchestrator.
 
 import asyncio
 import uuid
+import punq
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable, Awaitable, TYPE_CHECKING
-
 import structlog
 
 from chess_analyzer.config.settings import RunConfig
-from chess_analyzer.orchestration.annotator_client import AnnotatorClient
-from chess_analyzer.orchestration.game_processor import GameProcessor
 from chess_analyzer.orchestration.game_processor_pool import GameProcessorPool
-from chess_analyzer.orchestration.persistence_client import PersistenceClient
-from chess_analyzer.orchestration.pipeline_factory import create_pipeline
 from chess_analyzer.output.report_generator import ReportGenerator
-from chess_analyzer.services.analysis_provider import AnalysisProvider
+from chess_analyzer.types import GameSummary
 from chess_analyzer.services.engine_pool import EnginePool
 from chess_analyzer.services.pgn_service import PgnService
 from chess_analyzer.services.sqlite_cache_service import SqliteCacheService
-from chess_analyzer.services.stockfish_service import StockfishService
-from chess_analyzer.persistence.training_data_service import TrainingDataService
 from chess_analyzer.types import ProcessedGameResult, RunReport
-from chess_analyzer.core import (
-    move_classifier, narrative_generator, pgn_parser, summary_aggregator
-)
 
 if TYPE_CHECKING:
     import chess.pgn
 
-ProgressCallback = Callable[[int, int], Awaitable[None]]
 logger = structlog.get_logger(__name__)
 
-class AnalysisOrchestrator:
-    """The main application class, orchestrating the entire analysis run."""
+ProgressCallback = Callable[[int, int], Awaitable[None]]
 
+class PgnIngester:
+    """
+    Responsible for reading a PGN file and providing a stream of game data.
+    """
+    def __init__(self, file_path: Path):
+        self._file_path = file_path
+
+    def count_games(self) -> int:
+        """
+        Counts the number of games in the PGN file.
+        """
+        try:
+            with open(self._file_path, 'r', encoding='utf-8', errors='replace') as f:
+                return sum(1 for line in f if line.strip().startswith('[Event "'))
+        except FileNotFoundError:
+            logger.error("Input PGN file not found.", path=self._file_path, show_in_gui=True)
+            return 0
+
+    async def stream_games(self):
+        """
+        Streams games from the PGN file.  This is a placeholder; in a more
+        advanced implementation, this could yield `chess.pgn.Game` objects.
+        """
+        # In a real implementation, this method would read and yield games.
+        # For the sake of this example, we'll just log a message.
+        logger.info("Streaming games from PGN file.", path=self._file_path)
+        yield  # Placeholder: replace with actual game objects
+
+
+class ReportService:
+    """
+    Responsible for generating reports from processed game data.
+    """
+    def __init__(self, config: RunConfig):
+        self._config = config
+
+    def generate_summary_report(self, summaries: List[GameSummary]):
+        """
+        Generates a CSV report from a list of game summaries.
+        """
+        if summaries:
+            logger.info(f"Generating summary report at {self._config.output_csv_path}", show_in_gui=True)
+            ReportGenerator().generate_csv_report_from_summaries(summaries, Path(self._config.output_csv_path))
+
+class AnalysisOrchestrator:
     def __init__(
         self,
         config: RunConfig,
-        persistence_client: PersistenceClient,
+        container: punq.Container,
         progress_callback: Optional[ProgressCallback] = None,
         shutdown_event: Optional[asyncio.Event] = None
     ):
         self._config = config
-        self._persistence_client = persistence_client
+        self._container = container
+        self._progress_callback = progress_callback
         self._shutdown_event = shutdown_event or asyncio.Event()
         self._pgn_write_queue: asyncio.Queue["chess.pgn.Game"] = asyncio.Queue()
+        self._report_service = ReportService(config)
         self._background_tasks: List[asyncio.Task] = []
-        self._progress_callback = progress_callback
+
 
     async def _pgn_writer_task(self, service: PgnService, path: Path, queue: asyncio.Queue):
         logger.info("PGN writer task started.", path=str(path))
@@ -82,44 +119,21 @@ class AnalysisOrchestrator:
         run_id = f"run-{uuid.uuid4().hex[:8]}"
         logger.info("Starting analysis orchestration.", run_id=run_id, show_in_gui=True)
 
-        total_games = 0
-        try:
-            with open(self._config.input_pgn_path, 'r', encoding='utf-8', errors='replace') as f:
-                total_games = sum(1 for line in f if line.strip().startswith('[Event "'))
-        except FileNotFoundError:
-            logger.error("Input PGN file not found.", path=self._config.input_pgn_path, show_in_gui=True)
-            return RunReport(results=[], processed_game_count=0, user_found_in_games=False, warnings=["Input PGN file not found."])
+        pgn_ingester = PgnIngester(Path(self._config.input_pgn_path))
+        total_games = pgn_ingester.count_games()
+        if total_games == 0:
+            return RunReport(results=[], processed_game_count=0, user_found_in_games=False, warnings=["Input PGN file not found."]) # Or handle appropriately
         
+        # The EnginePool and SqliteCacheService are now managed as async context managers
+        # resolved directly from the container.
         try:
-
-            db_service_for_context = TrainingDataService(self._config.db_path)
-
-            engine_factory = StockfishService.create
-            async with SqliteCacheService(self._config.cache_settings) as cache, \
-                         EnginePool(self._config.engine_pool_settings, engine_factory) as engine_pool:
+            async with self._container.resolve(SqliteCacheService) as cache, \
+                         self._container.resolve(EnginePool) as engine_pool:
                 
                 self._background_tasks.append(asyncio.create_task(self._pgn_writer_task(PgnService(), Path(self._config.output_pgn_path), self._pgn_write_queue)))
                 
-                services = {
-                    "pgn_service": PgnService(),
-                    "engine_pool": engine_pool,
-                    "analysis_provider": AnalysisProvider(cache, self._config.analysis_settings),
-                    "persistence_client": self._persistence_client,
-                    "annotator_client": AnnotatorClient(),
-                    "move_classifier": move_classifier.MoveClassifier(),
-                    "narrative_generator_func": narrative_generator.generate_game_narrative,
-                    "pgn_parser_func": pgn_parser.parse_game_data,
-                    "persistence_service": db_service_for_context # Add the required service
-                }
-                pipeline = create_pipeline(services)
-                game_processor = GameProcessor(services, self._config, pipeline)
-                
-                game_pool = GameProcessorPool(
-                    config=self._config, processor=game_processor, engine_pool=engine_pool,
-                    pgn_service=services["pgn_service"], pgn_write_queue=self._pgn_write_queue,
-                    shutdown_event=self._shutdown_event, progress_callback=self._progress_callback,
-                    total_games=total_games,
-                )
+                # Resolve the fully configured GameProcessorPool from the container.
+                game_pool = self._container.resolve(GameProcessorPool, total_games=total_games, pgn_write_queue=self._pgn_write_queue, progress_callback=self._progress_callback, shutdown_event=self._shutdown_event)
                 
                 completed_results = await game_pool.run(Path(self._config.input_pgn_path), set(), run_id)
                 
@@ -148,9 +162,7 @@ class AnalysisOrchestrator:
                 if not self._shutdown_event.is_set() and report.results:
                     summaries = [res.summary for res in report.results if res.summary]
                     if summaries:
-                        logger.info(f"Generating summary report at {self._config.output_csv_path}", show_in_gui=True)
-                        ReportGenerator().generate_csv_report_from_summaries(summaries, Path(self._config.output_csv_path))
-                
+                        self._report_service.generate_summary_report(summaries)
                 return report
         except Exception as e:
             logger.critical("Orchestrator caught unhandled exception.", exc_info=True, show_in_gui=True)

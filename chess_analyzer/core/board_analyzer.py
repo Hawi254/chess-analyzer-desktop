@@ -27,7 +27,8 @@ def enrich_analysis_with_san(
     board: chess.Board,
     classification: "ClassificationResult",
     engine_lines: List["RawEngineLine"],
-    settings: "AnalysisSettings"
+    settings: "AnalysisSettings",
+    game_phase: str
 ) -> "EnrichedAnalysis":
     """
     Enriches raw analysis results with human-readable formatting.
@@ -41,6 +42,7 @@ def enrich_analysis_with_san(
         classification: The result object from the `MoveClassifier`.
         engine_lines: The list of raw lines from the engine service.
         settings: Application settings for mate score representation.
+        game_phase: The phase of the game for the current move.
 
     Returns:
         An `EnrichedAnalysis` dataclass containing the original classification
@@ -78,7 +80,8 @@ def enrich_analysis_with_san(
     
     return EnrichedAnalysis(
         classification=classification,
-        formatted_engine_lines=formatted_lines
+        formatted_engine_lines=formatted_lines,
+        game_phase=game_phase
     )
 
 def find_missed_tactic_motif(
