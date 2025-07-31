@@ -122,7 +122,7 @@ class RunConfig(BaseModel):
     engine_pool_settings: EnginePoolSettings
     cache_settings: CacheSettings
     user_player_name: Optional[str] = None # Add the new field
-    
+    analysis_settings: AnalysisSettings
 
 # --- Main Application Settings Class ---
 
