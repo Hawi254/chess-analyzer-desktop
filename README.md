@@ -34,16 +34,13 @@ A multi-tabbed, interactive dashboard designed to provide a deep, data-driven st
 
 #### Command Center (Overview)
 *   **At-a-Glance KPIs:** View your overall accuracy, win/loss/draw record, and total games analyzed, complete with "delta" indicators showing your recent form.
-*   **Performance Funnel:** A unique visualization that shows your ability to convert advantageous positions into wins.
-*   **"Opponent Cloud" Trend Chart:** A rich scatter plot that visualizes your accuracy over time, where the color of each point is the game result and its size is the opponent's rating.
+*   **Performance Calendar:** A GitHub-style heatmap visualizing your performance and activity over the last year.
 
 #### Arsenal (Opening Repertoire)
 *   **Interactive Performance Table:** A sortable, filterable table of every opening you've played, showing your W/L/D record and average accuracy in each.
 *   **"Cognitive Dissonance" Panel:** A deep-dive tool that highlights the key positions within an opening where the time you spent thinking did not correlate with the quality of the move you played, revealing critical knowledge gaps.
 
 #### Crucible (Tactical & Psychological Analysis)
-*   **Decision-Making Matrix:** A powerful bubble chart plotting time spent vs. positional complexity, with bubble size and color representing the severity of your errors. This provides a deep psychological profile of your decision-making habits.
-*   **Tactical Signature Heatmap:** An intuitive heatmap that shows which specific tactical motifs (e.g., Forks, Pins) you most frequently miss, providing a clear path for targeted puzzle practice.
 *   **Interactive Blunder Reel:** A scrollable list of your worst blunders, complete with a mini-board showing the position. Clicking any blunder immediately navigates to that exact move in the full "Annotated Game" view.
 
 ### Detailed Game Review
@@ -136,5 +133,3 @@ Dependencies: All dependencies are managed in pyproject.toml. To add a new depen
 Contributing
 
 Contributions are welcome. Please feel free to open an issue to report a bug or suggest a new feature. If you would like to contribute code, please fork the repository and submit a Pull Request.
-
-

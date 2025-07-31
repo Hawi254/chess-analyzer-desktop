@@ -1,8 +1,10 @@
 # chess_analysis_project/views/dashboard/opening_performance_model.py
+
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
 class OpeningPerformanceModel(QAbstractTableModel):
-    _HEADERS = ["Opening", "Played", "Score (%)", "Avg. CPL"]
+    # --- FIX: Update headers to reflect the new data being displayed. ---
+    _HEADERS = ["Opening", "Played", "Win %", "Avg. Accuracy"]
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -23,18 +25,30 @@ class OpeningPerformanceModel(QAbstractTableModel):
         if not index.isValid(): return None
         row_data = self._data[index.row()]
         col = index.column()
-
-        if role == Qt.DisplayRole:
-            if col == 0: return row_data.get('opening_name')
-            if col == 1: return row_data.get('games_played')
-            if col == 2:
-                wins = row_data.get('wins', 0)
-                draws = row_data.get('draws', 0)
-                total = row_data.get('games_played', 0)
-                if total == 0: return "N/A"
-                score = (wins + (0.5 * draws)) / total
-                return f"{score:.0%}"
-            if col == 3: return f"{row_data.get('average_cpl', 0):.1f}"
+        
+        if col == 0:
+            return row_data.get('opening_name', 'N/A') if role == Qt.DisplayRole else None
+        elif col == 1:
+            return row_data.get('games_played', 0) if role == Qt.DisplayRole else None
+        elif col == 2: # "Win %"
+            wins = row_data.get('wins', 0)
+            total = row_data.get('games_played', 0)
+            if total == 0: return 0.0
+            win_pct = (wins / total) * 100
+            if role == Qt.DisplayRole:
+                return f"{win_pct:.1f}%"
+            # --- FIX: Provide the raw numeric value for calculation roles. ---
+            elif role == Qt.ItemDataRole.EditRole:
+                return win_pct
+        elif col == 3: # "Avg. Accuracy"
+            accuracy = row_data.get('avg_accuracy')
+            if accuracy is None: return "N/A"
+            if role == Qt.DisplayRole:
+                return f"{accuracy:.1f}%"
+            # --- FIX: Provide the raw numeric value for calculation roles. ---
+            elif role == Qt.ItemDataRole.EditRole:
+                return accuracy
+        
         return None
         
     def get_row_data(self, row):
@@ -43,6 +57,12 @@ class OpeningPerformanceModel(QAbstractTableModel):
         return None
 
     def load_data(self, data: list):
+        """
+        Loads new data into the model. Returns True if data was loaded,
+        False otherwise. This fixes the primary bug.
+        """
+        # <<< FIX 1: This method now correctly returns True or False.
         self.beginResetModel()
-        self._data = data
+        self._data = data or [] # Ensure _data is a list, not None
         self.endResetModel()
+        return len(self._data) > 0

@@ -50,19 +50,30 @@ class BlunderReelDelegate(QStyledItemDelegate):
             renderer.render(painter, QRect(x, y, self.board_size, self.board_size))
 
         text_y = y
-        # --- CORRECTED: Use the stored font objects ---
+        text_width = option.rect.width() - text_x - self.item_padding
+
+        # --- Draw "You Played" line with wrapping ---
         painter.setFont(self._main_font)
         painter.setPen(option.palette.text().color())
         
-        played_move_san = item_data.get("played_move_san", "N/A") # Assume SAN is provided
+        played_move_san = item_data.get("played_move_san", "N/A")
         cpl = item_data.get("cpl", 0)
-        painter.drawText(text_x, text_y + self._fm_main.ascent(), f"You Played: {played_move_san} (CPL: {cpl:.0f})")
-        text_y += self._fm_main.height()
+        played_text = f"You Played: {played_move_san} (CPL: {cpl:.0f})"
+        
+        played_rect = self._fm_main.boundingRect(QRect(0, 0, text_width, 0), Qt.TextFlag.TextWordWrap, played_text)
+        played_rect.moveTo(text_x, text_y)
+        painter.drawText(played_rect, Qt.TextFlag.TextWordWrap, played_text)
+        text_y += played_rect.height()
 
+        # --- Draw "Correct" line with wrapping ---
         painter.setFont(self._sub_font)
-        correct_move_san = item_data.get("correct_move_san", "N/A") # Assume SAN is provided
+        correct_move_san = item_data.get("correct_move_san", "N/A")
         correct_eval = item_data.get("correct_eval_str", "")
-        painter.drawText(text_x, text_y + self._fm_sub.ascent(), f"Correct: {correct_move_san} ({correct_eval})")
+        correct_text = f"Correct: {correct_move_san} ({correct_eval})"
+        
+        correct_rect = self._fm_sub.boundingRect(QRect(0, 0, text_width, 0), Qt.TextFlag.TextWordWrap, correct_text)
+        correct_rect.moveTo(text_x, text_y)
+        painter.drawText(correct_rect, Qt.TextFlag.TextWordWrap, correct_text)
 
         painter.restore()
 

@@ -28,6 +28,6 @@ def create_pipeline(services: Dict[str, Any]) -> List[ProcessingStage]:
         AnalysisStage(services["analysis_provider"]),
         ClassificationStage(services["move_classifier"], services["persistence_client"]),
         PersistenceStage(services["persistence_client"]),
+        AnnotationStage(services["annotator_client"], services["persistence_client"]),
         SummaryStage(services["narrative_generator_func"], services["persistence_client"]),
-        AnnotationStage(services["annotator_client"]),
     ]

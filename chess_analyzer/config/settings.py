@@ -77,7 +77,7 @@ class AnalysisSettings(BaseModel):
     """Groups all settings related to the core chess analysis logic."""
     depth: int = Field(11, description="The search depth for the chess engine.")
     multipv: int = Field(3, description="The number of principal variations the engine should find.")
-    mate_score_equivalent_cp: int = Field(32767, description="The centipawn value assigned to a forced mate, used for CPL calculations.")
+    mate_score_equivalent_cp: int = Field(10000, description="The centipawn value assigned to a forced mate, used for CPL calculations.")
     
     classification_thresholds: ClassificationThresholdsModel = Field(default_factory=ClassificationThresholdsModel)
     brilliant_move: BrilliantMoveCriteriaModel = Field(default_factory=BrilliantMoveCriteriaModel)

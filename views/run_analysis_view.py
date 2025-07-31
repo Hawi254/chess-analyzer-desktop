@@ -1,20 +1,23 @@
 # chess_analysis_project/views/run_analysis_view.py
 """
 Defines the 'Run Analysis' dashboard view.
-
-This QWidget acts as the main control panel for the application. It is a
-'Humble Object' responsible only for displaying widgets and emitting signals
-for user interactions.
 """
-from pathlib import Path
-from typing import List
+from enum import Enum, auto
+import os
 
-from PySide6.QtCore import Signal, Qt
-from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QLineEdit, QFileDialog,
-                               QListWidget, QGridLayout, QProgressBar, QPushButton,
-                               QSpinBox, QTextEdit, QVBoxLayout, QWidget, QSizePolicy)
+from PySide6.QtCore import Signal, Slot, Qt
+from PySide6.QtWidgets import (QGridLayout, QGroupBox, QHBoxLayout, QLabel,
+                               QLineEdit, QListWidget, QProgressBar,
+                               QPushButton, QSpinBox, QTextEdit, QVBoxLayout,
+                               QWidget, QFileDialog)
 
-from views.shared.custom_widgets import StretchySplitter
+from views.shared.shared_widgets import StretchySplitter
+
+# --- NEW: An explicit state machine enum for clarity and robustness ---
+class UIState(Enum):
+    INITIALIZING = auto()
+    IDLE = auto()
+    RUNNING = auto()
 
 class RunAnalysisView(QWidget):
     """The UI for the main 'Run Analysis' dashboard."""
@@ -104,27 +107,11 @@ class RunAnalysisView(QWidget):
         """Connect internal widget signals to handler methods."""
         self.start_button.clicked.connect(self._on_start_clicked)
         self.cancel_button.clicked.connect(self.cancel_analysis_requested.emit)
-        self.browse_button.clicked.connect(self._browse_and_update)
-        
-        # --- CORRECTED: Connect to the actual, existing signals ---
-        self.file_list_widget.model().rowsInserted.connect(self._update_ui_state)
-        self.file_list_widget.model().rowsRemoved.connect(self._update_ui_state)
-        # --------------------------------------------------------
-        
-        self.username_input.textChanged.connect(self._update_ui_state)
+        # The browse button is connected in MainWindow
+        self.file_list_widget.model().rowsInserted.connect(self._update_start_button_state)
+        self.file_list_widget.model().rowsRemoved.connect(self._update_start_button_state)
+        self.username_input.textChanged.connect(self._update_start_button_state)
     
-    def _browse_and_update(self):
-        """Custom slot to handle browsing, clearing, and then adding new items."""
-        # This is triggered by the browse button click
-        file_paths, _ = QFileDialog.getOpenFileNames(self, "Open PGN Files", "", "PGN Files (*.pgn);;All Files (*)")
-        # We must clear the list *before* adding new items to ensure the model
-        # signals are processed in a predictable order.
-        self.file_list_widget.clear() 
-        if file_paths:
-            self.file_list_widget.addItems(file_paths)
-        # Manually call update state in case no file was selected, to reset the status message.
-        self._update_ui_state()
-        
     def _on_start_clicked(self):
         """Gathers config and emits the start_analysis_requested signal."""
         config = {
@@ -135,43 +122,97 @@ class RunAnalysisView(QWidget):
         }
         self.start_analysis_requested.emit(config)
 
-    def _update_ui_state(self):
-        """Updates the UI state based on input validity and provides user guidance."""
+    def _update_start_button_state(self):
+        """Internal logic to determine if the start button should be enabled."""
         has_files = self.file_list_widget.count() > 0
         has_username = bool(self.username_input.text().strip())
-
-        is_ready_to_start = has_files and has_username
-        self.start_button.setEnabled(is_ready_to_start)
-
+        is_ready = has_files and has_username
+        self.start_button.setEnabled(is_ready)
+        
+        # Update the status message based on what's missing
         if not has_files:
             self.status_update_requested.emit("Ready. Please select a PGN file.")
         elif not has_username:
             self.status_update_requested.emit("Please enter your player name to proceed.")
         else:
             self.status_update_requested.emit("Ready to start analysis.")
-    
-    def set_ui_for_analysis(self, is_running: bool):
-        """Toggles the UI state between idle and running."""
-        # Disable all input controls when running
-        self.browse_button.setEnabled(not is_running)
-        self.username_input.setEnabled(not is_running)
-        self.depth_spinbox.setEnabled(not is_running)
-        self.multipv_spinbox.setEnabled(not is_running)
-        
-        # Manage execution buttons
-        self.cancel_button.setEnabled(is_running)
-        self.progress_bar.setVisible(is_running)
 
-        if is_running:
+    # --- REMOVED: All old, conflicting state methods are gone ---
+    # set_ui_for_analysis(self, is_running: bool) is removed.
+    # set_ui_for_initializing(self, is_initializing: bool) is removed.
+
+    # --- NEW: The single, definitive state management method ---
+    @Slot(UIState)
+    def set_ui_state(self, state: UIState):
+        """Sets the enabled/disabled state of all widgets based on the application state."""
+        if state == UIState.INITIALIZING:
+            self.setEnabled(False)
+            self.status_update_requested.emit("Initializing database...")
+        elif state == UIState.RUNNING:
+            self.setEnabled(True)
+            self.browse_button.setEnabled(False)
+            self.username_input.setEnabled(False)
+            self.depth_spinbox.setEnabled(False)
+            self.multipv_spinbox.setEnabled(False)
             self.start_button.setEnabled(False)
+            self.cancel_button.setEnabled(True)
+            self.progress_bar.setVisible(True)
             self.status_update_requested.emit("Analysis in progress...")
-        else:
+        elif state == UIState.IDLE:
+            self.setEnabled(True)
+            self.browse_button.setEnabled(True)
+            self.username_input.setEnabled(True)
+            self.depth_spinbox.setEnabled(True)
+            self.multipv_spinbox.setEnabled(True)
+            self.cancel_button.setEnabled(False)
+            self.progress_bar.setVisible(False)
             self.progress_bar.setValue(0)
-            self._update_ui_state() # Reset start button state and status message
+            self._update_start_button_state()
 
+    # --- NEW: Public API for Presenter Interaction (Decoupling) ---
+
+    def get_config(self) -> dict:
+        """
+        Returns the current configuration from the UI widgets. This provides a
+        public API for the presenter to get the view's state without coupling.
+        """
+        pgn_file = None
+        if self.file_list_widget.count() > 0:
+            # Assuming only one file path is relevant for saving settings
+            pgn_file = self.file_list_widget.item(0).text()
+            
+        return {
+            "user_player_name": self.username_input.text().strip(),
+            "depth": self.depth_spinbox.value(),
+            "multipv": self.multipv_spinbox.value(),
+            "pgn_file": pgn_file
+        }
+
+    def set_config(self, config: dict):
+        """
+        Sets the UI widget values from a configuration dictionary. This provides
+        a public API for the presenter to set the view's state without coupling.
+        """
+        self.username_input.setText(config.get("player_name", ""))
+        self.depth_spinbox.setValue(config.get("depth", 11))
+        self.multipv_spinbox.setValue(config.get("multipv", 3))
+        
+        last_file = config.get("last_file", "")
+        if last_file and os.path.exists(last_file):
+            self.file_list_widget.clear()
+            self.file_list_widget.addItem(last_file)
+
+    def get_player_name(self) -> str:
+        """A simple public getter for the player name."""
+        return self.username_input.text().strip()
+
+    @Slot(str)
     def append_log_message(self, message: str):
+        """Appends a message to the status log text edit."""
         self.status_log.append(message.strip())
 
     def update_progress(self, current: int, total: int):
-        self.progress_bar.setRange(0, total)
-        self.progress_bar.setValue(current)
+        """Updates the progress bar's value during analysis."""
+        if total > 0:
+            self.progress_bar.setMaximum(total)
+            self.progress_bar.setValue(current)

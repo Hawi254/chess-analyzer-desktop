@@ -8,6 +8,7 @@ and abstracts away the database connection management, providing a clean API for
 the rest of the application. It is designed to be stateless, creating connections
 on a per-transaction basis to ensure safety in a concurrent environment.
 """
+import re
 import asyncio
 import chess
 from collections import defaultdict
@@ -20,8 +21,12 @@ import structlog
 
 from chess_analyzer.exceptions import PersistenceError
 from chess_analyzer.types import (
-    PositionStats, QueuePayload, QueuedPosition, QueuedStatUpdate, QueuedMove,
-    QueuedGameStat, QueuedOpeningLink
+    GameReportRow, PositionStats, QueuePayload, QueuedAnnotatedGame,
+    QueuedPosition, QueuedStatUpdate, QueuedMove, QueuedGameStat
+)
+from chess_analyzer.persistence.queries import (
+    AccuracyTrendQuery, BaseDashboardQuery, BlunderReelQuery,
+    CognitiveDissonanceQuery, KpiQuery, OpeningPerformanceQuery
 )
 from chess_analyzer.utils.retry import retry_with_backoff
 
@@ -52,28 +57,33 @@ class TrainingDataService:
         );
         CREATE TABLE IF NOT EXISTS moves (
             move_id INTEGER PRIMARY KEY AUTOINCREMENT, game_id TEXT NOT NULL, fen TEXT NOT NULL,
-            ply INTEGER NOT NULL, move_uci TEXT NOT NULL, cpl REAL, classification TEXT NOT NULL,
+            ply INTEGER NOT NULL, move_uci TEXT NOT NULL, best_move_san TEXT, cpl REAL, classification TEXT NOT NULL,
             time_spent_seconds REAL, post_move_eval REAL, is_reciprocal_blunder BOOLEAN DEFAULT 0,
+            game_phase TEXT DEFAULT 'Unknown',
             FOREIGN KEY (fen) REFERENCES positions(fen) ON DELETE CASCADE, UNIQUE(game_id, ply)
         );
         CREATE TABLE IF NOT EXISTS openings (opening_id INTEGER PRIMARY KEY, name TEXT UNIQUE);
-        CREATE TABLE IF NOT EXISTS position_to_opening (
-            fen TEXT, opening_id INTEGER, occurrence_count INTEGER NOT NULL DEFAULT 1,
-            PRIMARY KEY (fen, opening_id),
-            FOREIGN KEY (fen) REFERENCES positions(fen) ON DELETE CASCADE,
-            FOREIGN KEY (opening_id) REFERENCES openings(opening_id) ON DELETE CASCADE
-        );
         CREATE TABLE IF NOT EXISTS game_stats (
-            game_id TEXT PRIMARY KEY,
+            game_id TEXT NOT NULL,
             player_name TEXT NOT NULL,
             player_color TEXT NOT NULL,
             is_user_game INTEGER NOT NULL DEFAULT 0,
+            -- This new column directly links a game to its single opening.
+            opening_id INTEGER,
             game_date DATE,
+            game_time TEXT,
             time_control_category TEXT,
             opponent_rating INTEGER,
             eval_volatility REAL,
             accuracy_percent REAL,
-            result TEXT
+            result TEXT,
+            termination TEXT,
+            PRIMARY KEY (game_id, player_name),
+            FOREIGN KEY (opening_id) REFERENCES openings(opening_id)
+        );
+        CREATE TABLE IF NOT EXISTS annotated_games (
+            game_id TEXT PRIMARY KEY,
+            pgn_text TEXT NOT NULL
         );
     """
     
@@ -112,8 +122,8 @@ class TrainingDataService:
                 game_data['moves'].append(item.move_payload)
             elif isinstance(item, QueuedGameStat):
                 game_data['game_stats'].append(item.game_stat_payload)
-            elif isinstance(item, QueuedOpeningLink):
-                game_data['opening_links'].append(asdict(item))
+            elif isinstance(item, QueuedAnnotatedGame):
+                game_data['annotated_games'].append(asdict(item))
                 
         try:
             async with aiosqlite.connect(self._db_path, timeout=10) as conn:
@@ -133,26 +143,33 @@ class TrainingDataService:
                 
                 if moves_data := game_data.get('moves'):
                     sql = """INSERT OR IGNORE INTO moves 
-                             (game_id, fen, ply, move_uci, cpl, classification, time_spent_seconds, is_reciprocal_blunder, post_move_eval) 
-                             VALUES (:game_id, :fen, :ply, :move_uci, :cpl, :classification, :time_spent_seconds, :is_reciprocal_blunder, :post_move_eval)"""
+                             (game_id, fen, ply, move_uci, best_move_san, cpl, classification, time_spent_seconds, post_move_eval, is_reciprocal_blunder, game_phase) 
+                             VALUES (:game_id, :fen, :ply, :move_uci, :best_move_san, :cpl, :classification, :time_spent_seconds, :post_move_eval, :is_reciprocal_blunder, :game_phase)"""
                     await conn.executemany(sql, moves_data)
 
                 if game_stats_data := game_data.get('game_stats'):
+                    # --- FIX: The INSERT query now includes the opening_id column ---
                     sql = """INSERT OR IGNORE INTO game_stats 
-                             (game_id, player_name, player_color, is_user_game, game_date, time_control_category, opponent_rating, eval_volatility, accuracy_percent, result) 
-                             VALUES (:game_id, :player_name, :player_color, :is_user_game, :game_date, :time_control_category, :opponent_rating, :eval_volatility, :accuracy_percent, :result)"""
-                    await conn.executemany(sql, game_stats_data)
-                
-                if opening_links_data := game_data.get('opening_links'):
-                    for link in opening_links_data:
-                        cursor = await conn.execute("SELECT opening_id FROM openings WHERE name = ?", (link['opening_name'],))
-                        row = await cursor.fetchone()
-                        if row: opening_id = row['opening_id']
-                        else:
-                            cursor = await conn.execute("INSERT INTO openings (name) VALUES (?)", (link['opening_name'],))
-                            opening_id = cursor.lastrowid
-                        await conn.execute("INSERT INTO position_to_opening (fen, opening_id) VALUES (?, ?) ON CONFLICT(fen, opening_id) DO UPDATE SET occurrence_count = occurrence_count + 1;", (link['fen'], opening_id))
-                
+                             (game_id, player_name, player_color, is_user_game, opening_id, game_date, game_time, time_control_category, opponent_rating, eval_volatility, accuracy_percent, result, termination) 
+                             VALUES (:game_id, :player_name, :player_color, :is_user_game, :opening_id, :date, :game_time, :time_control_category, :opponent_rating, :eval_volatility, :accuracy_percent, :result, :termination)"""
+                    # --- FIX: Loop through each stat payload to resolve the opening_id ---
+                    for payload in game_stats_data:
+                        opening_id = None
+                        if opening_name := payload.get('opening_name'):
+                            cursor = await conn.execute("SELECT opening_id FROM openings WHERE name = ?", (opening_name,))
+                            row = await cursor.fetchone()
+                            if row: opening_id = row['opening_id']
+                            else:
+                                cursor = await conn.execute("INSERT INTO openings (name) VALUES (?)", (opening_name,))
+                                opening_id = cursor.lastrowid
+                        payload['opening_id'] = opening_id
+                        await conn.execute(sql, payload)
+
+                if annotated_games_data := game_data.get('annotated_games'):
+                    sql = """INSERT OR IGNORE INTO annotated_games (game_id, pgn_text) 
+                             VALUES (:game_id, :pgn_text)"""
+                    await conn.executemany(sql, annotated_games_data)
+
                 await conn.commit()
         except aiosqlite.Error as e:
             raise PersistenceError(f"Failed to persist game buffer: {e}") from e
@@ -177,25 +194,127 @@ class TrainingDataService:
         except aiosqlite.Error as e:
             raise PersistenceError(f"Failed to get stats batch: {e}") from e
         
-    def _build_filter_clause(self, filters: Dict, table_alias: str = "gs") -> Tuple[str, List[Any]]:
-        """Builds a SQL WHERE clause and parameters from a filter dictionary."""
-        params = []
-        where_clauses = [f"{table_alias}.is_user_game = 1"]
-        
-        if tc := filters.get('time_control'):
-            where_clauses.append(f"{table_alias}.time_control_category = ?")
-            params.append(tc)
-        if color := filters.get('color'):
-            where_clauses.append(f"{table_alias}.player_color = ?")
-            params.append(color)
-            
-        return f"WHERE {' AND '.join(where_clauses)}", params
+    # --- NEW: Methods for Paginated Game Report ---
 
+    async def get_game_report_count(self, filters: Dict) -> int:
+        """
+        Gets the total number of unique games that match the given filters.
+        This is used to set up the UI for lazy loading (e.g., scrollbar size).
+        """
+        # Use parameterized query to prevent SQL injection
+        where_clause = "WHERE gs.player_name = ?"
+        params = (filters['player_name'],)
+        query = f"SELECT COUNT(DISTINCT game_id) FROM game_stats gs {where_clause};"
         
-    # --- Dashboard Query Methods (Fully Implemented) ---
+        try:
+            async with aiosqlite.connect(self._db_path) as conn:
+                cursor = await conn.execute(query, tuple(params))
+                row = await cursor.fetchone()
+                return row[0] if row else 0
+        except aiosqlite.Error as e:
+            raise PersistenceError(f"Failed to get game report count: {e}") from e
 
-    async def get_kpis(self, filters: Dict) -> Dict:
-        where_clause, params = self._build_filter_clause(filters, "gs")
+    async def get_paginated_game_report(self, filters: Dict, limit: int, offset: int) -> List[GameReportRow]:
+        """
+        Fetches a 'page' of aggregated game data for the main report view.
+        
+        This query is optimized to gather all necessary data for the report in a single pass,
+
+        """
+        where_clause = "WHERE gs_filter.player_name = ?"
+        params = (filters['player_name'],)
+
+        query = f"""
+            WITH GameBlunders AS (
+                SELECT
+                    m.game_id,
+                    SUM(CASE WHEN p.player_to_move = 'w' AND m.classification = 'Blunder' THEN 1 ELSE 0 END) as white_blunders,
+                    SUM(CASE WHEN p.player_to_move = 'b' AND m.classification = 'Blunder' THEN 1 ELSE 0 END) as black_blunders
+                FROM moves m
+                JOIN positions p ON m.fen = p.fen
+                WHERE m.classification = 'Blunder'
+                GROUP BY m.game_id
+            )
+            SELECT
+                gs.game_id, gs.game_date, gs.result,
+                MAX(CASE WHEN gs.player_color = 'White' THEN gs.player_name END) as white_player,
+                MAX(CASE WHEN gs.player_color = 'Black' THEN gs.player_name END) as black_player,
+                MAX(CASE WHEN gs.player_color = 'White' THEN gs.accuracy_percent END) as white_accuracy,
+                MAX(CASE WHEN gs.player_color = 'Black' THEN gs.accuracy_percent END) as black_accuracy,
+                COALESCE(gb.white_blunders, 0) as white_blunders,
+                COALESCE(gb.black_blunders, 0) as black_blunders,
+                -- The opening_id is the same for both players in a game, so MAX() is safe.
+                MAX(o.name) as opening_name
+            FROM game_stats gs
+            LEFT JOIN GameBlunders gb ON gs.game_id = gb.game_id
+            -- Directly join with openings table using the new foreign key in game_stats.
+            LEFT JOIN openings o ON gs.opening_id = o.opening_id
+            WHERE gs.game_id IN (SELECT DISTINCT game_id FROM game_stats gs_filter {where_clause})
+            GROUP BY gs.game_id
+            ORDER BY gs.game_date DESC, gs.game_time DESC
+            LIMIT ? OFFSET ?;
+        """
+        try:
+            async with aiosqlite.connect(self._db_path) as conn:
+                conn.row_factory = aiosqlite.Row
+                logger.info(
+                    "TDS: EXECUTING PAGINATED GAME REPORT QUERY",
+                    sql=query.replace('\n', ' ').strip(),
+                    params=params + (limit, offset)
+                )
+                cursor = await conn.execute(query, params + (limit, offset))
+                rows = await cursor.fetchall()
+                return [GameReportRow(**dict(row)) for row in rows]
+        except aiosqlite.Error as e:
+            raise PersistenceError(f"Failed to get paginated game report: {e}") from e
+        
+    async def get_annotated_pgn(self, game_id: str) -> Optional[str]:
+        """
+        Retrieves the full annotated PGN text for a single game by its ID.
+        """
+        query = "SELECT pgn_text FROM annotated_games WHERE game_id = ?;"
+        try:
+            async with aiosqlite.connect(self._db_path) as conn:
+                # No need for a row factory, we just want the first column.
+                cursor = await conn.execute(query, (game_id,))
+                row = await cursor.fetchone()
+                return row[0] if row else None
+        except aiosqlite.Error as e:
+            logger.error("Failed to retrieve annotated PGN", game_id=game_id, exc_info=True)
+            raise PersistenceError(f"Failed to get annotated PGN for game_id {game_id}: {e}") from e
+
+    def _classify_evaluation(self, evaluation: float, player_color: str) -> str:
+        """
+        Classifies a centipawn evaluation into a discrete state from the player's perspective.
+        """
+        # Flip the evaluation sign if the player is Black
+        if player_color.lower() == 'black':
+            evaluation *= -1
+
+        if evaluation > 350:
+            return "Winning"
+        elif 100 < evaluation <= 350:
+            return "Better"
+        elif -100 <= evaluation <= 100:
+            return "Equal"
+        elif -350 <= evaluation < -100:
+            return "Worse"
+        else:  # evaluation < -350
+            return "Losing"
+
+    def _get_terminal_state(self, result: str, player_color: str) -> str:
+        """Determines the terminal game state based on result and player color."""
+        if result == '1/2-1/2':
+            return 'Game Drawn'
+        if (result == '1-0' and player_color == 'White') or (result == '0-1' and player_color == 'Black'):
+            return 'Game Won'
+        return 'Game Lost'
+
+        # --- Dashboard Query Methods (Fully Implemented) ---
+
+    async def get_kpis(self, query_obj: KpiQuery) -> Dict:
+        # The query object now encapsulates the logic of which filters to apply.
+        where_clause, params = query_obj.build_clause("gs")
         query = f"""
             SELECT
                 COUNT(gs.game_id) as total_games,
@@ -208,136 +327,200 @@ class TrainingDataService:
                 )) as recent_avg_accuracy
             FROM game_stats gs {where_clause};
         """
+        final_data = {}
         try:
             async with aiosqlite.connect(self._db_path) as conn:
                 conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute(query, tuple(params))
+                
+                logger.info(
+                    "TDS: EXECUTING KPI QUERY",
+                    sql=query.replace('\n', ' ').strip(),
+                    params=tuple(params) * 2
+                )
+                # The WHERE clause is used twice, so the params list must be duplicated.
+                cursor = await conn.execute(query, tuple(params) * 2)
+                
                 row = await cursor.fetchone()
-                return dict(row) if row and row['total_games'] > 0 else {}
+                final_data = dict(row) if row and row['total_games'] > 0 else {}
+                logger.debug("TDS KPI query complete.", data=final_data)
+                return final_data
         except aiosqlite.Error as e:
             raise PersistenceError(f"Failed to get KPIs: {e}") from e
+        finally:
+            logger.debug("TDS: get_kpis returning data.", data=final_data)
+
+    async def get_accuracy_trend(self, query_obj: AccuracyTrendQuery) -> List[Dict]:
+        """
+        Fetches trend data aggregated by a specified time period and for a
+        specified metric, for use in the performance calendar.
+        """
+        where_clause, params = query_obj.build_clause("gs")
         
-
-    async def get_accuracy_trend(self, filters: Dict) -> List[Dict]:
-        """Fetches accuracy over time, respecting filters."""
-        where_clause, params = self._build_filter_clause(filters, "gs")
-        
-        # Select all necessary columns for the "Opponent Cloud" plot
-        query = f"""
-            SELECT 
-                gs.game_id, 
-                gs.game_date, 
-                gs.accuracy_percent,
-                gs.result,
-                gs.player_color,
-                gs.opponent_rating
-            FROM game_stats gs
-            {where_clause} AND gs.accuracy_percent IS NOT NULL
-            ORDER BY gs.game_date;
-        """
-        try:
-            async with aiosqlite.connect(self._db_path) as conn:
-                conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute(query, tuple(params))
-                return [dict(row) for row in await cursor.fetchall()]
-        except aiosqlite.Error as e:
-            raise PersistenceError(f"Failed to get accuracy trend: {e}") from e
-
-    async def get_performance_by_phase(self, filters: Dict) -> List[Dict]:
-        where_clause, params = self._build_filter_clause(filters)
-        query = f"""
-            SELECT p.game_phase, AVG(m.cpl) as average_cpl,
-                   SUM(CASE WHEN m.classification = 'Blunder' THEN 1 ELSE 0 END) as blunder_count
-            FROM moves m JOIN positions p ON m.fen = p.fen JOIN game_stats gs ON m.game_id = gs.game_id
-            {where_clause} GROUP BY p.game_phase;
-        """
-        try:
-            async with aiosqlite.connect(self._db_path) as conn:
-                conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute(query, tuple(params))
-                return [dict(row) for row in await cursor.fetchall()]
-        except aiosqlite.Error as e:
-            raise PersistenceError(f"Failed to get phase performance: {e}") from e
-
-    async def get_decision_making_matrix_data(self, filters: Dict) -> List[Dict]:
-        where_clause, params = self._build_filter_clause(filters)
-        query = f"""
-            SELECT m.time_spent_seconds, ps.eval_std_dev, m.cpl, m.classification, m.game_id, m.ply
-            FROM moves m JOIN position_stats ps ON m.fen = ps.fen JOIN game_stats gs ON m.game_id = gs.game_id
-            {where_clause} AND m.time_spent_seconds IS NOT NULL AND ps.eval_std_dev IS NOT NULL;
-        """
-        try:
-            async with aiosqlite.connect(self._db_path) as conn:
-                conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute(query, tuple(params))
-                return [dict(row) for row in await cursor.fetchall()]
-        except aiosqlite.Error as e:
-            raise PersistenceError(f"Failed to get decision matrix data: {e}") from e
-
-    async def get_tactical_signature(self, filters: Dict) -> List[Dict]:
-        where_clause, params = self._build_filter_clause(filters)
-        query = f"""
-            SELECT m.classification, ps.tactic_type, COUNT(*) as frequency
-            FROM moves m JOIN position_stats ps ON m.fen = ps.fen JOIN game_stats gs ON m.game_id = gs.game_id
-            {where_clause} AND ps.tactic_type IS NOT NULL AND m.classification IN ('Blunder', 'Mistake')
-            GROUP BY m.classification, ps.tactic_type;
-        """
-        try:
-            async with aiosqlite.connect(self._db_path) as conn:
-                conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute(query, tuple(params))
-                return [dict(row) for row in await cursor.fetchall()]
-        except aiosqlite.Error as e:
-            raise PersistenceError(f"Failed to get tactical signature data: {e}") from e
+        # --- NEW: Add date range filtering ---
+        if query_obj.date_range:
+            months = 0
+            if query_obj.date_range == "Last 3 Months":
+                months = 3
+            elif query_obj.date_range == "Last 6 Months":
+                months = 6
             
-    async def get_opening_performance_table(self, filters: Dict) -> List[Dict]:
-        where_clause, params = self._build_filter_clause(filters)
-        query = f"""
-            SELECT o.name as opening_name, o.opening_id, COUNT(DISTINCT gs.game_id) as games_played,
-                   SUM(CASE WHEN (gs.result = '1-0' AND gs.player_color = 'White') OR (gs.result = '0-1' AND gs.player_color = 'Black') THEN 1 ELSE 0 END) as wins,
-                   SUM(CASE WHEN gs.result = '1/2-1/2' THEN 1 ELSE 0 END) as draws,
-                   AVG(gs.accuracy_percent) as avg_accuracy
-            FROM openings o
-            JOIN position_to_opening pto ON o.opening_id = pto.opening_id
-            JOIN game_stats gs ON pto.fen IN (SELECT fen FROM moves WHERE game_id = gs.game_id)
-            {where_clause}
-            GROUP BY o.opening_id, o.name HAVING games_played > 0 ORDER BY games_played DESC;
-        """
-        try:
-            async with aiosqlite.connect(self._db_path) as conn:
-                conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute(query, tuple(params))
-                return [dict(row) for row in await cursor.fetchall()]
-        except aiosqlite.Error as e:
-            raise PersistenceError(f"Failed to get opening performance: {e}") from e
+            if months > 0:
+                # SQLite's date functions work with 'YYYY-MM-DD'.
+                where_clause += f" AND REPLACE(gs.game_date, '.', '-') >= date('now', '-{months} months')"
 
-    async def get_cognitive_dissonance_positions(self, opening_id: int, filters: Dict) -> List[Dict]:
-        where_clause, params = self._build_filter_clause(filters, "gs")
+        # --- 1. Dynamic Granularity Expression ---
+        granularity = query_obj.granularity
+        if granularity == "Weekly":
+            date_key_expression = "strftime('%Y-%W', REPLACE(gs.game_date, '.', '-'))"
+        elif granularity == "Monthly":
+            date_key_expression = "strftime('%Y-%m', REPLACE(gs.game_date, '.', '-'))"
+        elif granularity == "Daily":
+            date_key_expression = "strftime('%Y-%m-%d', REPLACE(gs.game_date, '.', '-'))"
+        else:
+            logger.warning("Invalid granularity received, defaulting to Weekly.", received=granularity)
+            date_key_expression = "strftime('%Y-%W', REPLACE(gs.game_date, '.', '-'))"
+
+        # --- 2. Dynamic Metric Expression ---
+        metric = query_obj.metric
+        if metric == "Accuracy":
+            metric_expression = "AVG(gs.accuracy_percent)"
+        elif metric == "Win Rate":
+            metric_expression = "SUM(CASE WHEN (gs.result = '1-0' AND gs.player_color = 'White') OR (gs.result = '0-1' AND gs.player_color = 'Black') THEN 1.0 ELSE 0.0 END) * 100.0 / COUNT(gs.game_id)"
+        else:
+            logger.warning("Invalid metric received, defaulting to Accuracy.", received=metric)
+            metric_expression = "AVG(gs.accuracy_percent)"
+
+        # --- 3. Construct Final Query ---
         query = f"""
-            SELECT m.fen, m.time_spent_seconds, m.cpl, (m.time_spent_seconds * m.cpl) as dissonance_score
-            FROM moves m JOIN position_to_opening pto ON m.fen = pto.fen JOIN game_stats gs ON m.game_id = gs.game_id
-            {where_clause} AND pto.opening_id = ? AND m.cpl > 100
-            ORDER BY dissonance_score DESC LIMIT 5;
+            SELECT
+                {date_key_expression} as date_key,
+                {metric_expression} as metric_value,
+                COUNT(gs.game_id) as game_count,
+                json_group_array(
+                    json_object(
+                        'game_id', gs.game_id,
+                        'opponent_rating', gs.opponent_rating,
+                        'result', gs.result,
+                        'player_color', gs.player_color
+                    )
+                ) as games_json
+            FROM game_stats gs
+            {where_clause} 
+            AND gs.accuracy_percent IS NOT NULL 
+            AND gs.game_date IS NOT NULL 
+
+            GROUP BY date_key
+            ORDER BY date_key;
+        """
+        result_list = []
+        try:
+            async with aiosqlite.connect(self._db_path) as conn:
+                conn.row_factory = aiosqlite.Row
+                logger.info(
+                    "TDS: EXECUTING DYNAMIC TREND QUERY",
+                    sql=query.replace('\n', ' ').strip(),
+                    params=tuple(params)
+                )
+                cursor = await conn.execute(query, tuple(params))
+                result_list = [dict(row) for row in await cursor.fetchall()]
+                logger.debug("TDS Dynamic Trend query complete.", item_count=len(result_list))
+                return result_list
+        except aiosqlite.Error as e:
+            raise PersistenceError(f"Failed to get dynamic trend data: {e}") from e
+        finally:
+            logger.debug("TDS: get_accuracy_trend returning dynamic data.", count=len(result_list))
+
+    async def get_opening_performance_table(self, query_obj: OpeningPerformanceQuery) -> List[Dict]:
+        """
+        Fetches aggregated performance data for each opening played by the user.
+        This version uses a corrected and more efficient JOIN strategy.
+        """
+        where_clause, params = query_obj.build_clause("gs")
+        
+        query = f"""
+            SELECT
+                o.name AS opening_name,
+                gs.opening_id,
+                COUNT(gs.game_id) AS games_played,
+                SUM(CASE WHEN (gs.result = '1-0' AND gs.player_color = 'White') OR (gs.result = '0-1' AND gs.player_color = 'Black') THEN 1 ELSE 0 END) AS wins,
+                SUM(CASE WHEN gs.result = '1/2-1/2' THEN 1 ELSE 0 END) AS draws,
+                AVG(gs.accuracy_percent) AS avg_accuracy
+            FROM game_stats AS gs
+            JOIN openings AS o ON gs.opening_id = o.opening_id
+            {where_clause} AND gs.opening_id IS NOT NULL
+            GROUP BY gs.opening_id, o.name
+            HAVING games_played > 0
+            ORDER BY games_played DESC, avg_accuracy DESC;
+        """
+        
+        try:
+            async with aiosqlite.connect(self._db_path) as conn:
+                conn.row_factory = aiosqlite.Row
+                logger.info(
+                    "TDS: EXECUTING OPENING PERFORMANCE QUERY",
+                    sql=query.replace('\n', ' ').strip(),
+                    params=tuple(params)
+                )
+                cursor = await conn.execute(query, tuple(params))
+                results = [dict(row) for row in await cursor.fetchall()]
+                logger.info("TDS: Found opening performance data.", count=len(results))
+                return results
+        except aiosqlite.Error as e:
+            logger.error("TDS: Failed to get opening performance", exc_info=e)
+            raise PersistenceError(f"Failed to get opening performance: {e}") from e
+        
+    async def get_cognitive_dissonance_positions(self, query_obj: CognitiveDissonanceQuery) -> List[Dict]:
+        where_clause, params = query_obj.build_clause("gs")
+        query = f"""
+            SELECT
+                m.game_id, m.ply, m.fen, m.time_spent_seconds, m.cpl, m.post_move_eval,
+                m.move_uci as played_move_uci, m.best_move_san,
+                (m.time_spent_seconds * m.cpl) as dissonance_score
+            FROM moves m
+            JOIN game_stats gs ON m.game_id = gs.game_id
+            {where_clause} AND gs.opening_id = ? AND m.cpl > 100
+            ORDER BY dissonance_score DESC LIMIT ?;
         """
         try:
             async with aiosqlite.connect(self._db_path) as conn:
                 conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute(query, tuple(params + [opening_id]))
-                return [dict(row) for row in await cursor.fetchall()]
+                
+                final_params = tuple(params + [query_obj.opening_id, query_obj.limit])
+
+                logger.info(
+                    "TDS: EXECUTING DISSONANCE QUERY",
+                    sql=query.replace('\n', ' ').strip(), params=final_params
+                )
+                
+                cursor = await conn.execute(query, final_params)
+                results = await cursor.fetchall()
+                logger.debug("TDS: Raw dissonance data from DB.", data=[dict(r) for r in results])
+                logger.info("TDS: Dissonance query returned rows.", count=len(results))
+                
+                return [dict(row) for row in results]
+                
         except aiosqlite.Error as e:
             raise PersistenceError(f"Failed to get dissonance positions: {e}") from e
-
-    async def get_blunder_reel_data(self, filters: Dict, limit: int = 20) -> List[Dict]:
-        where_clause, params = self._build_filter_clause(filters, "gs")
+        
+    async def get_blunder_reel_data(self, query_obj: BlunderReelQuery) -> List[Dict]:
+        where_clause, params = query_obj.build_clause("gs")
         query = f"""
             SELECT m.game_id, m.ply, m.fen as fen_before_blunder, m.move_uci as played_move_uci, m.cpl
-            FROM moves m JOIN game_stats gs ON m.game_id = gs.game_id
-            {where_clause} AND m.classification = 'Blunder' ORDER BY m.cpl DESC LIMIT ?;
+            FROM moves m
+            JOIN game_stats gs ON m.game_id = gs.game_id
+            JOIN positions p ON m.fen = p.fen
+            {where_clause}
+            AND (
+                (gs.player_color = 'White' AND p.player_to_move = 'w') OR
+                (gs.player_color = 'Black' AND p.player_to_move = 'b')
+            )
+            AND m.classification = 'Blunder' ORDER BY m.cpl DESC LIMIT ?;
         """
+
         try:
             async with aiosqlite.connect(self._db_path) as conn:
                 conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute(query, tuple(params + [limit]))
+                cursor = await conn.execute(query, tuple(params + [query_obj.limit]))
                 rows = await cursor.fetchall()
                 enriched_data = []
                 for row in rows:
@@ -353,65 +536,4 @@ class TrainingDataService:
                     enriched_data.append(data)
                 return enriched_data
         except aiosqlite.Error as e:
-            raise PersistenceError(f"Failed to get blunder reel data: {e}") from e        
-        
-    async def get_tilt_analysis_data(self, filters: Dict) -> List[Dict]:
-        where_clause, params = self._build_filter_clause(filters, "gs")
-        # --- CORRECTED: Added the 'gs' alias to the FROM clause ---
-        query = f"""
-            SELECT gs.game_id, gs.game_date, gs.result, gs.player_color,
-                   (SELECT COUNT(*) FROM moves m WHERE m.game_id = gs.game_id AND m.classification = 'Blunder') as blunder_count
-            FROM game_stats gs {where_clause}
-            ORDER BY gs.game_date, gs.game_id;
-        """
-        try:
-            async with aiosqlite.connect(self._db_path) as conn:
-                conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute(query, tuple(params))
-                return [dict(row) for row in await cursor.fetchall()]
-        except aiosqlite.Error as e:
-            raise PersistenceError(f"Failed to get tilt analysis data: {e}") from e
-
-    async def get_performance_funnel_data(self, filters: Dict) -> Dict:
-        """Calculates the stages of the performance funnel using accurate evaluation data."""
-        where_clause, params = self._build_filter_clause(filters, "gs")
-        
-        # We define "advantage" as an evaluation > 150 centipawns (1.5 pawns)
-        # We check for this advantage at the end of the opening (ply 24)
-        advantage_threshold = 150 
-        opening_ply_limit = 24
-
-        query = f"""
-            WITH AdvantageousGames AS (
-                SELECT DISTINCT m.game_id
-                FROM moves m
-                JOIN game_stats gs ON m.game_id = gs.game_id
-                {where_clause}
-                AND m.ply = ?
-                AND (
-                    (gs.player_color = 'White' AND m.post_move_eval > ?) OR
-                    (gs.player_color = 'Black' AND m.post_move_eval < -?)
-                )
-            )
-            SELECT
-                (SELECT COUNT(*) FROM game_stats gs {where_clause}) as total_user_games,
-                (SELECT COUNT(*) FROM AdvantageousGames) as games_with_advantage,
-                (
-                    SELECT COUNT(*)
-                    FROM game_stats gs
-                    WHERE gs.game_id IN (SELECT game_id FROM AdvantageousGames)
-                    AND ((gs.result = '1-0' AND gs.player_color = 'White') OR (gs.result = '0-1' AND gs.player_color = 'Black'))
-                ) as converted_wins;
-        """
-        
-        # The parameters need to be structured carefully for this query
-        full_params = params + [opening_ply_limit, advantage_threshold, advantage_threshold] + params
-
-        try:
-            async with aiosqlite.connect(self._db_path) as conn:
-                conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute(query, tuple(full_params))
-                row = await cursor.fetchone()
-                return dict(row) if row and row['total_user_games'] > 0 else {}
-        except aiosqlite.Error as e:
-            raise PersistenceError(f"Failed to get funnel data: {e}") from e
+            raise PersistenceError(f"Failed to get blunder reel data: {e}") from e
