@@ -99,8 +99,12 @@ def classify_endgame_type(fen: str) -> str:
     # Simple heuristics for common endgame types
     if white_rooks + black_rooks == 1 and white_pawns + black_pawns > 0:
         return "Rook & Pawn"
-    if white_bishops == 1 and black_bishops == 1 and all(p.color != chess.WHITE for p in black_pieces if p.piece_type == chess.BISHOP) and all(p.color != chess.BLACK for p in white_pieces if p.piece_type == chess.BISHOP):
-        return "Opposite-Colored Bishops"
+    if white_bishops == 1 and black_bishops == 1:
+        # Find the squares of the bishops to check their colors
+        white_bishop_square = next(sq for sq, p in piece_map.items() if p.piece_type == chess.BISHOP and p.color == chess.WHITE)
+        black_bishop_square = next(sq for sq, p in piece_map.items() if p.piece_type == chess.BISHOP and p.color == chess.BLACK)
+        if chess.square_color(white_bishop_square) != chess.square_color(black_bishop_square):
+            return "Opposite-Colored Bishops"
     if white_knights + black_knights == 1 and white_pawns + black_pawns > 0:
         return "Knight & Pawn"
     if white_rooks + black_rooks == 2 and white_pawns + black_pawns == 0:
