@@ -86,7 +86,7 @@ class TrendSummaryCard(QWidget):
     def _toggle_collapse(self):
         self._is_collapsed = not self._is_collapsed
         self.body_frame.setVisible(not self._is_collapsed)
-        self.collapse_toggle_button.setArrowType(Qt.ArrowType.RightArrow if self._is_collapsed else Qt.ArrowType.DownArrow)
+        self.collapse_button.setArrowType(Qt.ArrowType.RightArrow if self._is_collapsed else Qt.ArrowType.DownArrow)
         # Adjust size policy to hint layout manager about content change
         if self._is_collapsed:
             self.body_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
