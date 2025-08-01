@@ -7,9 +7,7 @@ import asyncio
 import io
 import punq
 from typing import Dict, List, Optional
-from dataclasses import asdict
 
-import numpy as np
 from PySide6.QtCore import QObject, Signal, QThread, Slot
 import chess.pgn
 
@@ -24,10 +22,8 @@ from chess_analyzer.persistence.queries import (AccuracyTrendQuery,
     BaseDashboardQuery, BlunderReelQuery, CognitiveDissonanceQuery, KpiQuery,
     OpeningPerformanceQuery
 )
-from chess_analyzer.persistence.training_data_service import TrainingDataService
 from chess_analyzer.types import (
-    GameReportRow, ProcessedGameResult, RunReport, GameSummary,
-    GameStatistics, PlayerStats, GameMetadata, MoveClassification
+    GameReportRow, RunReport
 )
 from chess_analyzer.services.database_manager import DatabaseManager
 from state.app_state import AppState
@@ -230,7 +226,8 @@ class StatisticsWorker(QObject):
         result_map = dict(zip(tasks.keys(), results))
 
         for key, result in result_map.items():
-            if not self._is_running: break
+            if not self._is_running:
+                break
             if isinstance(result, Exception):
                 self.error.emit(f"Query failed for {key}: {result}")
             elif key in signal_map:
@@ -340,7 +337,7 @@ class AppController(QObject):
             # set into the app_state. The controller now manages this data flow.
             # self._app_state.set_results(report.results) 
             self.finished.emit(report)
-        except Exception as e:
+        except Exception:
             logger.error("Error processing completed RunReport", exc_info=True)
             self.error.emit("A data processing error occurred.")
 
@@ -374,7 +371,8 @@ class AppController(QObject):
 
     def _cleanup_analysis_thread(self):
         logger.debug("Entering cleanup...")
-        if not self.analysis_thread: return
+        if not self.analysis_thread:
+            return
         logger.debug("Cleaning up analysis thread.")
         self.analysis_thread.quit()
         self.analysis_thread.wait(2000)

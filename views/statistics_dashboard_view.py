@@ -2,7 +2,6 @@
 """
 Defines the main container for the 'Player's Mind' statistics dashboard.
 """
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
 # --- Import all three fully implemented view components ---

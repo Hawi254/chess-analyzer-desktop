@@ -125,6 +125,27 @@ class CalendarHeatmapWidget(QWidget):
                 # Store rect with data for this specific day for interactivity
                 self._cell_rects[cell_rect] = (current_date, date_key, period_data)
 
+        # Find the column for "Today" and draw a faint vertical line
+        today_week_index = -1
+        for week_idx in range(53):
+            current_date_in_loop = start_date + timedelta(weeks=week_idx)
+            if current_date_in_loop.year == today.year and current_date_in_loop.month == today.month and current_date_in_loop.day == today.day:
+                today_week_index = week_idx
+                break
+        
+        if today_week_index != -1:
+            # Draw "TODAY" label
+            today_label = "TODAY"
+            painter.setFont(self._font) # Use the regular font for this
+            painter.setPen(self.palette().text().color()) # Use text color
+
+            # Calculate position for the label above the column
+            label_x = x_offset + today_week_index * cell_size + (cell_size / 2) - (painter.fontMetrics().horizontalAdvance(today_label) / 2)
+            label_y = y_offset - 15 # A bit above the cells
+
+            painter.drawText(int(label_x), int(label_y), today_label)
+
+
         self._draw_day_labels(painter, y_offset, cell_size)
         self._draw_month_labels(painter, x_offset, cell_size, month_positions)
         self._draw_legend(painter)
@@ -133,11 +154,11 @@ class CalendarHeatmapWidget(QWidget):
         """Handles clicks on a day cell and emits the data for the entire period."""
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
-            for rect, (_, _, period_data) in self._cell_rects.items():
+            for rect, (_, date_key, period_data) in self._cell_rects.items():
                 if rect.contains(pos):
                     # Emit all game IDs for the period if data exists
                     if period_data and 'games' in period_data:
-                        self.period_clicked.emit(period_data['games'])
+                        self.period_clicked.emit(period_data['games'], date_key)
                     return
         super().mousePressEvent(event)
 

@@ -22,7 +22,8 @@ class OpeningPerformanceModel(QAbstractTableModel):
         return None
 
     def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid(): return None
+        if not index.isValid():
+            return None
         row_data = self._data[index.row()]
         col = index.column()
         
@@ -33,7 +34,8 @@ class OpeningPerformanceModel(QAbstractTableModel):
         elif col == 2: # "Win %"
             wins = row_data.get('wins', 0)
             total = row_data.get('games_played', 0)
-            if total == 0: return 0.0
+            if total == 0:
+                return 0.0
             win_pct = (wins / total) * 100
             if role == Qt.DisplayRole:
                 return f"{win_pct:.1f}%"
@@ -42,7 +44,8 @@ class OpeningPerformanceModel(QAbstractTableModel):
                 return win_pct
         elif col == 3: # "Avg. Accuracy"
             accuracy = row_data.get('avg_accuracy')
-            if accuracy is None: return "N/A"
+            if accuracy is None:
+                return "N/A"
             if role == Qt.DisplayRole:
                 return f"{accuracy:.1f}%"
             # --- FIX: Provide the raw numeric value for calculation roles. ---

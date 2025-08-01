@@ -2,13 +2,12 @@
 """
 Defines the central state model for the application.
 """
-from typing import Dict, List, Optional
+from typing import Optional
 
 import chess.pgn
 from PySide6.QtCore import QObject, Signal
 import structlog
 
-from chess_analyzer.types import ProcessedGameResult
 
 
 class AppState(QObject):

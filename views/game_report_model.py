@@ -63,16 +63,25 @@ class GameReportModel(QAbstractTableModel):
         col = index.column()
 
         if role == Qt.ItemDataRole.DisplayRole:
-            if col == 0: return summary.game_id
-            if col == 1: return summary.metadata.white_player
-            if col == 2: return summary.metadata.black_player
-            if col == 3: return summary.metadata.result
-            if col == 4: return summary.metadata.opening or "N/A"
-            if col == 5: return f"{summary.stats.white.accuracy_percent}%" if summary.stats.white.accuracy_percent is not None else "N/A"
-            if col == 6: return f"{summary.stats.black.accuracy_percent}%" if summary.stats.black.accuracy_percent is not None else "N/A"
+            if col == 0:
+                return summary.game_id
+            if col == 1:
+                return summary.metadata.white_player
+            if col == 2:
+                return summary.metadata.black_player
+            if col == 3:
+                return summary.metadata.result
+            if col == 4:
+                return summary.metadata.opening or "N/A"
+            if col == 5:
+                return f"{summary.stats.white.accuracy_percent}%" if summary.stats.white.accuracy_percent is not None else "N/A"
+            if col == 6:
+                return f"{summary.stats.black.accuracy_percent}%" if summary.stats.black.accuracy_percent is not None else "N/A"
             from chess_analyzer.types import MoveClassification
-            if col == 7: return summary.stats.white.move_counts.get(MoveClassification.BLUNDER, 0)
-            if col == 8: return summary.stats.black.move_counts.get(MoveClassification.BLUNDER, 0)
+            if col == 7:
+                return summary.stats.white.move_counts.get(MoveClassification.BLUNDER, 0)
+            if col == 8:
+                return summary.stats.black.move_counts.get(MoveClassification.BLUNDER, 0)
         
         if role == Qt.ItemDataRole.ForegroundRole:
             if col in [7, 8] and self.data(index, Qt.ItemDataRole.DisplayRole) > 0:

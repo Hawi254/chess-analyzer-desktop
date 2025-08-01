@@ -7,7 +7,7 @@ import chess.svg
 import structlog
 from PySide6.QtCore import QModelIndex, QSortFilterProxyModel, Signal, Qt, Slot
 from PySide6.QtSvgWidgets import QSvgWidget
-from PySide6.QtWidgets import (QAbstractItemView, QHeaderView, QLabel, QListWidget,
+from PySide6.QtWidgets import (QAbstractItemView, QHeaderView, QListWidget,
                                QListWidgetItem, QSplitter, QTableView,
                                QVBoxLayout, QWidget)
 

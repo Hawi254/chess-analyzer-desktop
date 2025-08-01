@@ -6,7 +6,7 @@ Configures application-wide structured logging using structlog.
 import logging
 import sys
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import List, Optional
 
 import structlog
 from structlog.types import Processor

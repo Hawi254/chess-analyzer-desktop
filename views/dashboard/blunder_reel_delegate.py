@@ -4,10 +4,10 @@ Defines a custom delegate for rendering items in the Blunder Reel.
 """
 import chess
 import chess.svg
-from PySide6.QtCore import QRect, Qt, QSize, QPoint
-from PySide6.QtGui import QFont, QFontMetrics, QPainter, QPixmap, QPen
+from PySide6.QtCore import QRect, Qt, QSize
+from PySide6.QtGui import QFont, QFontMetrics, QPainter
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem, QStyle, QListWidgetItem
+from PySide6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem, QStyle
 
 class BlunderReelDelegate(QStyledItemDelegate):
     """Delegate to draw a mini-board, played move, and correct move."""

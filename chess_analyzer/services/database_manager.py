@@ -4,16 +4,14 @@ Provides a centralized, application-wide service for managing database interacti
 """
 import asyncio
 from collections import defaultdict
-from dataclasses import asdict
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot  # <--- CORRECTED: Added Slot import
+from PySide6.QtCore import QObject, QThread, Signal  # <--- CORRECTED: Added Slot import
 import structlog
 
 from chess_analyzer.persistence.training_data_service import TrainingDataService
 from chess_analyzer.types import (
-    QueuePayload, QueuedGameComplete, QueuedPosition, QueuedStatUpdate, QueuedMove,
-    QueuedGameStat
+    QueuePayload, QueuedGameComplete
 )
 
 logger = structlog.get_logger(__name__)

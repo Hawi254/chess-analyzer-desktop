@@ -3,7 +3,7 @@
 Custom delegate for rendering cells in the Opening Performance table.
 """
 from PySide6.QtCore import QModelIndex, Qt
-from PySide6.QtGui import QColor, QPainter, QPaintEvent
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 class OpeningTableDelegate(QStyledItemDelegate):

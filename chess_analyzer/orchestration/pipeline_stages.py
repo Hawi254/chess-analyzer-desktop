@@ -10,9 +10,8 @@ from one stage to the next, with each stage reading from and writing to it.
 """
 
 import asyncio
-from collections import defaultdict
 import statistics
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Callable, Dict, List, Optional, TYPE_CHECKING
 
 import chess
 import chess.pgn
@@ -29,7 +28,7 @@ from chess_analyzer.types import (GameContext, MoveAnalysisContext,
                                   QueuedAnnotatedGame, QueuedGameComplete,
                                   QueuedGameStat, QueuedMove, QueuedPosition,
                                   QueuedStatUpdate, ProcessingStage,
-                                  EnrichedAnalysis, GameSlice, GameSummary,
+                                  GameSlice, GameSummary,
                                   RawEngineLine)
 
 if TYPE_CHECKING:
@@ -48,9 +47,11 @@ logger = structlog.get_logger(__name__)
 
 def _calculate_eval_std_dev(lines: List["RawEngineLine"], settings: "AnalysisSettings") -> Optional[float]:
     """Calculates the standard deviation of the top N engine evaluation scores."""
-    if settings.multipv < 2 or len(lines) < 2: return None
-    scores = [s for s in (interpret_engine_score(l, settings) for l in lines) if s is not None]
-    if len(scores) < 2: return None
+    if settings.multipv < 2 or len(lines) < 2:
+        return None
+    scores = [s for s in (interpret_engine_score(line, settings) for line in lines) if s is not None]
+    if len(scores) < 2:
+        return None
     return round(statistics.stdev(scores), 2)
 
 def _build_move_analysis_context(
@@ -219,7 +220,8 @@ class PersistenceStage(ProcessingStage):
     
     @trace_stage
     async def execute(self, context: GameContext) -> GameContext:
-        if not context.parsed_game: return context
+        if not context.parsed_game:
+            return context
         
         last_line_san = ""
         for update in context.stat_updates:
@@ -271,15 +273,19 @@ class SummaryStage(ProcessingStage):
     
     @trace_stage
     async def execute(self, context: GameContext) -> GameContext:
-        if not context.parsed_game: return context
+        if not context.parsed_game:
+            return context
 
         context.summary = summary_aggregator.aggregate_game_summary(context, context.settings)
-        if not context.summary: return context
+        if not context.summary:
+            return context
         
         context.summary.narrative = self._gen(context.summary, context.settings)
         
         raw_headers = context.raw_game.headers
-        def safe_get_rating(headers, key): return int(v) if (v := headers.get(key, "0")).isdigit() else 0
+        def safe_get_rating(headers, key):
+            v = headers.get(key, "0")
+            return int(v) if v.isdigit() else 0
         
         user_name = context.run_config.user_player_name
         is_white_user = user_name and context.summary.metadata.white_player.strip().lower() == user_name.strip().lower()
@@ -328,15 +334,16 @@ class AnnotationStage(ProcessingStage):
     
     @trace_stage
     async def execute(self, context: GameContext) -> GameContext:
-        if not context.enriched_analyses: return context
+        if not context.enriched_analyses:
+            return context
         
         # Start from the root node of the game.
         current_node = context.raw_game
         for enriched_result in context.enriched_analyses:
             # Advance to the node corresponding to the move being annotated.
             current_node = current_node.next()
-            if current_node is None: break
-                
+            if current_node is None:
+                break
             user_comment, clk_tag = self._annotator.prepare_comment_parts(current_node.comment)
             anno_ctx = build_anno_ctx(
                 enriched_analysis=enriched_result, user_comment=user_comment,

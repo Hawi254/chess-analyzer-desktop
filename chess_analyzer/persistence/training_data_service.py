@@ -8,7 +8,6 @@ and abstracts away the database connection management, providing a clean API for
 the rest of the application. It is designed to be stateless, creating connections
 on a per-transaction basis to ensure safety in a concurrent environment.
 """
-import re
 import asyncio
 import chess
 from collections import defaultdict
@@ -25,7 +24,7 @@ from chess_analyzer.types import (
     QueuedPosition, QueuedStatUpdate, QueuedMove, QueuedGameStat
 )
 from chess_analyzer.persistence.queries import (
-    AccuracyTrendQuery, BaseDashboardQuery, BlunderReelQuery,
+    AccuracyTrendQuery, BlunderReelQuery,
     CognitiveDissonanceQuery, KpiQuery, OpeningPerformanceQuery
 )
 from chess_analyzer.utils.retry import retry_with_backoff
@@ -158,7 +157,8 @@ class TrainingDataService:
                         if opening_name := payload.get('opening_name'):
                             cursor = await conn.execute("SELECT opening_id FROM openings WHERE name = ?", (opening_name,))
                             row = await cursor.fetchone()
-                            if row: opening_id = row['opening_id']
+                            if row:
+                                opening_id = row['opening_id']
                             else:
                                 cursor = await conn.execute("INSERT INTO openings (name) VALUES (?)", (opening_name,))
                                 opening_id = cursor.lastrowid
@@ -176,7 +176,8 @@ class TrainingDataService:
 
     async def get_position_stats_batch(self, fens: List[str]) -> Dict[str, "PositionStats"]:
         """Retrieves long-term statistics for a batch of FENs for the analysis pipeline."""
-        if not fens: return {}
+        if not fens:
+            return {}
         
         placeholders = ','.join('?' for _ in fens)
         sql = f"SELECT * FROM position_stats WHERE fen IN ({placeholders})"

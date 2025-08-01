@@ -6,7 +6,7 @@ import chess
 import chess.svg
 from enum import Enum, auto
 
-from PySide6.QtCore import QSize, Qt, Signal, Slot
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (QApplication, QGroupBox, QHBoxLayout, QLabel, QListWidget,
                                QListWidgetItem, QPushButton, QStackedWidget,

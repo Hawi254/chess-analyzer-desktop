@@ -2,16 +2,14 @@
 """
 The main entry point and Presenter for the Chess Analyzer Desktop application.
 """
-import os
-import sys
 
 import structlog
 from typing import List, Optional
 
-from PySide6.QtCore import QSettings, QTimer, Slot
+from PySide6.QtCore import QSettings, Slot
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import (QApplication, QFileDialog, QVBoxLayout, QMainWindow,
-                               QStackedWidget, QWidget, QToolBar, QMessageBox)
+from PySide6.QtWidgets import (QFileDialog, QVBoxLayout, QMainWindow,
+                               QWidget, QToolBar, QMessageBox)
 
 from app_controller import AppController
 from chess_analyzer.config.settings import settings

@@ -10,8 +10,7 @@ the `asyncio.Queue` that the background database writer consumes.
 """
 
 import asyncio
-from dataclasses import dataclass
-from typing import Any, Dict, Optional, TypeAlias, Union
+from typing import TypeAlias, Union
 
 import structlog
 

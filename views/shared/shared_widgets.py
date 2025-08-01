@@ -3,7 +3,7 @@
 Defines shared, reusable custom Qt widgets for the application.
 """
 from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QSize, Qt
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QFrame, QGraphicsDropShadowEffect, QLabel,
                                QStackedLayout, QVBoxLayout, QWidget, QToolButton,
                                QSplitter, QStackedWidget, QSizePolicy)
@@ -44,11 +44,12 @@ class CardWidget(QFrame):
             }
 
         """)
+        # self.setMinimumHeight(150) # Removed to allow parent layouts to control minimum height
 
         self._is_collapsible = collapsible
         
         self._main_layout = QVBoxLayout(self)
-        self._main_layout.setContentsMargins(12, 12, 12, 12)
+        self._main_layout.setContentsMargins(12, 8, 12, 8) # Adjusted top/bottom padding
         self._main_layout.setSpacing(8)
 
         # The content_area holds the widgets added by the user of this card.
@@ -85,11 +86,15 @@ class CardWidget(QFrame):
             self.toggle_button.setText(title)
             self.toggle_button.setCheckable(True)
             self.toggle_button.setChecked(start_expanded)
-            font = self.toggle_button.font(); font.setPointSize(14); self.toggle_button.setFont(font)
+            font = self.toggle_button.font()
+            font.setPointSize(14)
+            self.toggle_button.setFont(font)
             return self.toggle_button
         else:
             label = QLabel(f"<b>{title}</b>")
-            font = label.font(); font.setPointSize(14); label.setFont(font)
+            font = label.font()
+            font.setPointSize(14)
+            label.setFont(font)
             return label
 
     def _toggle_content(self, checked: bool):
@@ -112,7 +117,8 @@ class CardWidget(QFrame):
 
     def set_content_layout(self, layout: QVBoxLayout):
         old_layout = self.content_area.layout()
-        if old_layout: QWidget().setLayout(old_layout)
+        if old_layout:
+            QWidget().setLayout(old_layout)
         self.content_area.setLayout(layout)
 
     def set_content(self, widget: QWidget):
@@ -123,7 +129,8 @@ class CardWidget(QFrame):
         new_layout.addWidget(widget)
 
         old_layout = self.content_area.layout()
-        if old_layout: QWidget().setLayout(old_layout) # Properly dispose of the old layout
+        if old_layout:
+            QWidget().setLayout(old_layout) # Properly dispose of the old layout
         self.content_area.setLayout(new_layout)
 
     def show_loading(self):

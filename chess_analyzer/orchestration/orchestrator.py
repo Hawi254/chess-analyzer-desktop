@@ -8,7 +8,7 @@ import uuid
 import punq
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Callable, Awaitable, TYPE_CHECKING
+from typing import List, Optional, Callable, Awaitable, TYPE_CHECKING
 import structlog
 
 from chess_analyzer.config.settings import RunConfig
@@ -18,7 +18,7 @@ from chess_analyzer.types import GameSummary
 from chess_analyzer.services.engine_pool import EnginePool
 from chess_analyzer.services.pgn_service import PgnService
 from chess_analyzer.services.sqlite_cache_service import SqliteCacheService
-from chess_analyzer.types import ProcessedGameResult, RunReport
+from chess_analyzer.types import RunReport
 
 if TYPE_CHECKING:
     import chess.pgn
@@ -95,7 +95,8 @@ class AnalysisOrchestrator:
                 try:
                     game = await asyncio.wait_for(queue.get(), timeout=1.0)
                     try:
-                        if game is None: break
+                        if game is None:
+                            break
                         await service.export_annotated_game(game, path)
                     finally:
                         # This ensures task_done is only called after a successful get()
@@ -112,7 +113,8 @@ class AnalysisOrchestrator:
         if self._background_tasks:
             logger.debug("Cancelling orchestrator background tasks.")
             for task in self._background_tasks:
-                if not task.done(): task.cancel()
+                if not task.done():
+                    task.cancel()
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
 
     async def run(self) -> RunReport:
@@ -127,16 +129,17 @@ class AnalysisOrchestrator:
         # The EnginePool and SqliteCacheService are now managed as async context managers
         # resolved directly from the container.
         try:
-            async with self._container.resolve(SqliteCacheService) as cache, \
-                         self._container.resolve(EnginePool) as engine_pool:
-                
+            async with (
+                self._container.resolve(SqliteCacheService) as _,
+                self._container.resolve(EnginePool) as _
+            ):
                 self._background_tasks.append(asyncio.create_task(self._pgn_writer_task(PgnService(), Path(self._config.output_pgn_path), self._pgn_write_queue)))
-                
+
                 # Resolve the fully configured GameProcessorPool from the container.
                 game_pool = self._container.resolve(GameProcessorPool, total_games=total_games, pgn_write_queue=self._pgn_write_queue, progress_callback=self._progress_callback, shutdown_event=self._shutdown_event)
-                
+
                 completed_results = await game_pool.run(Path(self._config.input_pgn_path), set(), run_id)
-                
+
                 user_found = False
                 if self._config.user_player_name:
                     user_name_lower = self._config.user_player_name.strip().lower()
@@ -147,18 +150,18 @@ class AnalysisOrchestrator:
                         ):
                             user_found = True
                             break
-                
+
                 report = RunReport(
                     results=completed_results, processed_game_count=len(completed_results),
                     user_found_in_games=user_found
                 )
-                
+
                 logger.info("Main processing complete. Draining writer queues.", show_in_gui=True)
                 await self._pgn_write_queue.join()
                 await self._pgn_write_queue.put(None)
-                
+
                 await asyncio.gather(*self._background_tasks, return_exceptions=True)
-                
+
                 if not self._shutdown_event.is_set() and report.results:
                     summaries = [res.summary for res in report.results if res.summary]
                     if summaries:
