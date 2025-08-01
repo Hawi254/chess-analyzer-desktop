@@ -9,7 +9,7 @@ from PySide6.QtCore import Signal, Slot, Qt
 from PySide6.QtWidgets import (QGridLayout, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QProgressBar,
                                QPushButton, QSpinBox, QTextEdit, QVBoxLayout,
-                               QWidget, QFileDialog)
+                               QWidget)
 
 from views.shared.shared_widgets import StretchySplitter
 
@@ -54,8 +54,10 @@ class RunAnalysisView(QWidget):
         self.status_log.setFontFamily("monospace")
         
         self.username_input.setPlaceholderText("Enter your name exactly as it appears in PGN files")
-        self.depth_spinbox.setRange(5, 20); self.depth_spinbox.setValue(11)
-        self.multipv_spinbox.setRange(1, 8); self.multipv_spinbox.setValue(3)
+        self.depth_spinbox.setRange(5, 20)
+        self.depth_spinbox.setValue(11)
+        self.multipv_spinbox.setRange(1, 8)
+        self.multipv_spinbox.setValue(3)
 
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(False)

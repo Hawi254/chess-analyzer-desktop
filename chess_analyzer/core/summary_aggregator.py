@@ -11,10 +11,9 @@ evaluation volatility, making the data ready for reporting.
 import math
 import statistics
 from collections import Counter
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
-from chess_analyzer.types import (GameStatistics, GameSummary, MoveClassification,
-                                  PlayerStats)
+from chess_analyzer.types import (GameStatistics, GameSummary, PlayerStats)
 
 if TYPE_CHECKING:
     from chess_analyzer.config.settings import AnalysisSettings

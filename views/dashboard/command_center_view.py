@@ -2,16 +2,12 @@
 """
 Defines the "Command Center" tab for the main statistics dashboard.
 """
-from datetime import datetime
-from typing import Optional
-import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Signal, Qt, Slot
 from PySide6.QtGui import QBrush
-from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget)
 import structlog
 
-from views.dashboard.calendar_heatmap_widget import CalendarHeatmapWidget
 from views.shared.shared_widgets import CardWidget
 
 logger = structlog.get_logger(__name__)

@@ -6,7 +6,7 @@ import re
 from typing import Any, Dict
 
 from PySide6.QtCore import QRect, Qt, QSize
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPixmap
 from PySide6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem, QStyle
 
 CLASSIFICATION_RE = re.compile(r"\{\[(.+?)\]\}")

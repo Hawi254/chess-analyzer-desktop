@@ -16,8 +16,7 @@ from chess_analyzer.types import MoveClassification
 
 if TYPE_CHECKING:
     from chess_analyzer.config.settings import AnalysisSettings
-    from chess_analyzer.types import (AnnotationContext, EnrichedAnalysis,
-                                      FormattedEngineLine)
+    from chess_analyzer.types import (AnnotationContext, EnrichedAnalysis)
 
 # Pre-compiled regex to find and extract a PGN clock tag (e.g., "[%clk 0:05:33.7]").
 CLK_TAG_PATTERN = re.compile(r"(\s*\[%clk\s+.*?\]\s*)")

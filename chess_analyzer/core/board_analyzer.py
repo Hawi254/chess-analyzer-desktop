@@ -20,7 +20,7 @@ import chess
 if TYPE_CHECKING:
     from chess_analyzer.config.settings import AnalysisSettings
     from chess_analyzer.types import (ClassificationResult, EnrichedAnalysis,
-                                      FormattedEngineLine, RawEngineLine)
+                                      RawEngineLine)
 
 
 def enrich_analysis_with_san(

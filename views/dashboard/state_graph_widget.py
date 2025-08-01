@@ -84,12 +84,14 @@ class StateGraphWidget(QWidget):
         totals = {state: sum(targets.values()) for state, targets in transition_data.items()}
 
         for from_state, targets in transition_data.items():
-            if from_state not in state_to_idx: continue
+            if from_state not in state_to_idx:
+                continue
             from_idx = state_to_idx[from_state]
             total_from = totals.get(from_state, 1)
 
             for to_state, count in targets.items():
-                if to_state not in state_to_idx or count == 0: continue
+                if to_state not in state_to_idx or count == 0:
+                    continue
                 to_idx = state_to_idx[to_state]
                 adj.append((from_idx, to_idx))
 

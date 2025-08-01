@@ -12,7 +12,7 @@ the main application orchestration.
 import asyncio
 import re
 from pathlib import Path
-from typing import AsyncGenerator, List, Set, TextIO, Tuple
+from typing import AsyncGenerator, List, Set, TextIO, Tuple, Generator
 
 import aiofiles
 import chess.pgn

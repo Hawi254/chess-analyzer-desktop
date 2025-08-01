@@ -15,7 +15,6 @@ pyside6 = "^6.9.1"
 pydantic = "^2.7.4"
 pydantic-settings = "^2.3.4"
 structlog = "^24.2.0"
-python-chess = "^1.999"
 # --- THE FIX: Removed the unnecessary and conflicting stockfish package ---
 aiosqlite = "^0.20.0"
 aiofiles = "^23.2.1"
@@ -27,6 +26,7 @@ numpy = "^2.3.1"
 scipy = "^1.16.0"
 pytest-qt = "^4.5.0"
 punq = "^0.7.0"
+python-chess = "^1.999"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.4.2"

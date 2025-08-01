@@ -14,7 +14,6 @@ from typing import Awaitable, Callable, List, Optional, TYPE_CHECKING
 
 import structlog
 
-from chess_analyzer.exceptions import EngineInitializationError
 from chess_analyzer.types import EngineService
 
 if TYPE_CHECKING:

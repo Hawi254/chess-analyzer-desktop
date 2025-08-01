@@ -7,14 +7,14 @@ import asyncio
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Set, TYPE_CHECKING, Optional, Callable, Awaitable
+from typing import Dict, List, Set, TYPE_CHECKING, Optional, Callable, Awaitable
 
 import structlog
 
 from chess_analyzer.exceptions import EngineError, PgnParsingError
 from chess_analyzer.orchestration.game_processor import GameProcessor
 from chess_analyzer.tracing import CorrelationID
-from chess_analyzer.types import GameSummary, ProcessedGameResult
+from chess_analyzer.types import ProcessedGameResult
 
 if TYPE_CHECKING:
     import chess.pgn
@@ -61,7 +61,8 @@ class GameProcessorPool:
                 raise EngineError("Acquired engine is unhealthy", engine=engine)
             return await self._processor.process_game(game, engine, self._shutdown_event)
         finally:
-            if engine: self._engine_pool.release(engine)
+            if engine:
+                self._engine_pool.release(engine)
             self._semaphore.release()
             structlog.contextvars.clear_contextvars()
 
@@ -73,7 +74,8 @@ class GameProcessorPool:
 
         async def _filler():
             async for game in self._pgn_service.stream_games(input_pgn_path):
-                if self._shutdown_event.is_set(): break
+                if self._shutdown_event.is_set():
+                    break
                 await work_queue.put(game)
             await work_queue.put(None)
         filler_task = asyncio.create_task(_filler())
@@ -81,7 +83,8 @@ class GameProcessorPool:
         def _done_callback(task: asyncio.Task) -> None:
             """Callback executed when a game processing task completes or fails."""
             original_game = pending_tasks.pop(task, None)
-            if not original_game: return
+            if not original_game:
+                return
             
             # We do not call task_done() here immediately. It's only called when a game
             # is TRULY finished (i.e., successfully processed or failed max retries).
@@ -114,7 +117,8 @@ class GameProcessorPool:
                     # IMPORTANT: We do NOT call task_done() here. We re-queue the work.
                     # The original `get()` will be matched by a `task_done()` from the *new* task.
                     work_queue.put_nowait(original_game)
-                    if e.engine: asyncio.create_task(self._engine_pool.retire_and_replace(e.engine))
+                    if e.engine:
+                        asyncio.create_task(self._engine_pool.retire_and_replace(e.engine))
                 else:
                     logger.error("Max retries exceeded for game.", game_id=game_id, show_in_gui=True)
                     work_queue.task_done() # Game failed permanently.
@@ -164,6 +168,7 @@ class GameProcessorPool:
             for task in pending_tasks:
                 task.cancel()
             await asyncio.gather(*list(pending_tasks.keys()), return_exceptions=True)
-        if not filler_task.done(): filler_task.cancel()
+        if not filler_task.done():
+            filler_task.cancel()
         
         return all_results
